@@ -1,0 +1,18 @@
+# Data directories (large GIFs)
+NM0029_*/
+Screenshots/
+
+# PDFs
+*.pdf
+
+# Exported results
+*.tsv
+
+# Python
+__pycache__/
+*.pyc
+venv/
+*.egg-info/
+
+# OS
+.DS_Store

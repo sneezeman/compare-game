@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compare Game - Epoch Comparison Tool</title>
+    <link rel="stylesheet" href="/static/style.css?v=4">
+</head>
+<body>
+    <h1>Compare Game</h1>
+
+    <!-- Phase 1: Upload & Selection -->
+    <div id="phase-upload" class="phase active">
+        <div id="upload-zone">
+            <p>Drop GIF(s) here or click to upload</p>
+            <p class="hint">Grayscale GIFs with multiple epochs as frames</p>
+        </div>
+        <input type="file" id="file-input" accept=".gif" multiple>
+        <div id="upload-list"></div>
+
+        <div id="preloaded-section" style="display: none;">
+            <h3>Available experiments</h3>
+            <div id="preloaded-list"></div>
+        </div>
+
+        <div class="center-row" style="margin-top: 20px;">
+            <button id="start-selected-btn" class="btn" disabled onclick="startWithSelected()">
+                Select GIFs to compare
+            </button>
+        </div>
+    </div>
+
+    <!-- Phase 2: ROI Selection -->
+    <div id="phase-roi" class="phase">
+        <h3 id="roi-title" class="center-row" style="margin-bottom: 8px;"></h3>
+        <div class="roi-controls">
+            <label>
+                <input type="checkbox" id="heatmap-toggle" checked>
+                Variability heatmap
+            </label>
+            <label>
+                OTF radius (r<sub>o</sub>):
+                <input type="number" id="ro-input" min="0.05" max="1.0" step="0.05" value="0.5">
+            </label>
+            <button class="btn btn-secondary" onclick="showPhase('upload')">Back</button>
+        </div>
+
+        <p class="center-row" style="color: #888; margin-bottom: 8px;">
+            Click and drag to select a region of interest. The heatmap highlights areas with the most variation across epochs.
+        </p>
+
+        <div class="center-row">
+            <div id="roi-container">
+                <img id="roi-base-img" alt="First frame">
+                <img id="roi-overlay-img" alt="Variability heatmap">
+                <canvas id="roi-canvas"></canvas>
+            </div>
+        </div>
+
+        <p id="roi-info" class="center-row" style="margin-top: 8px; font-weight: 600;"></p>
+
+        <div class="center-row">
+            <button id="start-tournament-btn" class="btn" disabled onclick="startTournament()">
+                Start Comparison
+            </button>
+        </div>
+    </div>
+
+    <!-- Phase 3: Tournament -->
+    <div id="phase-tournament" class="phase">
+        <div id="progress-bar-container">
+            <div id="progress-bar" style="width: 0%"></div>
+            <div id="progress-text">Comparison 1 of ~18</div>
+        </div>
+
+        <div class="size-slider-row">
+            <label>Image size: <input type="range" id="img-size-slider" min="200" max="1600" value="600" step="50"></label>
+            <span id="img-size-label">600px</span>
+        </div>
+
+        <div id="tournament-area">
+            <div id="comparison-display">
+                <!-- Dynamically built: epoch label + images per view -->
+            </div>
+
+            <div id="metrics-panel">
+                <h3 style="margin-bottom: 10px; text-align: center;">Metrics</h3>
+                <table id="metrics-table"></table>
+            </div>
+        </div>
+
+        <div id="keyboard-hints">
+            <div class="hint-row"><kbd>&larr;</kbd> / <kbd>&rarr;</kbd> Switch images</div>
+            <div class="hint-row"><kbd>Space</kbd> <kbd>Space</kbd> Select winner</div>
+            <div class="hint-row"><kbd>Enter</kbd> Tie (metrics decide)</div>
+            <div class="hint-row"><kbd>Ctrl+Z</kbd> Undo</div>
+        </div>
+    </div>
+
+    <!-- Phase 4: Results -->
+    <div id="phase-results" class="phase">
+        <div id="results-section">
+            <h2>Tournament Results</h2>
+            <div id="results-podium" class="results-podium"></div>
+            <h3 style="margin-top: 20px; color: #aaa;">Full Ranking</h3>
+            <table id="full-ranking-table"></table>
+            <div class="results-actions">
+                <button class="btn" onclick="exportResults()">Export Results</button>
+                <button class="btn btn-secondary" onclick="rerunSameROI()">Re-run (same ROI)</button>
+                <button class="btn btn-secondary" onclick="rerunWithNewROI()">New ROI</button>
+                <button class="btn btn-secondary" onclick="location.reload()">Start Over</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/compare.js?v=4"></script>
+</body>
+</html>

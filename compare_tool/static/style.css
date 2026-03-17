@@ -1,0 +1,488 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+}
+
+h1 {
+    text-align: center;
+    padding: 20px;
+    color: #e94560;
+    font-size: 1.8em;
+}
+
+.phase {
+    display: none;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 20px 40px;
+}
+
+.phase.active {
+    display: block;
+}
+
+/* Phase 1: Upload & Selection */
+#upload-zone {
+    border: 3px dashed #e94560;
+    border-radius: 12px;
+    padding: 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    margin: 20px auto;
+    max-width: 600px;
+}
+
+#upload-zone:hover, #upload-zone.dragover {
+    background: rgba(233, 69, 96, 0.1);
+    border-color: #ff6b81;
+}
+
+#upload-zone p {
+    font-size: 1.1em;
+    margin-bottom: 8px;
+}
+
+#upload-zone .hint {
+    color: #888;
+    font-size: 0.9em;
+}
+
+#file-input {
+    display: none;
+}
+
+#upload-list {
+    margin-top: 20px;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.upload-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 14px;
+    background: #16213e;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    gap: 12px;
+}
+
+.checkbox-label {
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: #e94560;
+}
+
+.exp-info-text {
+    min-width: 0;
+    overflow: hidden;
+}
+
+.upload-item .filename {
+    font-weight: 600;
+    display: block;
+    font-size: 0.95em;
+}
+
+.upload-item .info {
+    color: #888;
+    font-size: 0.8em;
+    display: inline-block;
+    margin-right: 8px;
+    word-break: break-all;
+}
+
+/* Preloaded list */
+#preloaded-section {
+    max-width: 700px;
+    margin: 24px auto 0;
+}
+
+#preloaded-section h3 {
+    margin-bottom: 10px;
+    color: #ccc;
+}
+
+/* Phase 2: ROI Selection */
+#roi-container {
+    position: relative;
+    display: inline-block;
+    margin: 0 auto;
+    cursor: crosshair;
+    max-width: 100%;
+    overflow: auto;
+}
+
+#roi-container img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+#roi-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+}
+
+#roi-overlay-img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    opacity: 0.6;
+    max-width: 100%;
+    height: auto;
+}
+
+.roi-controls {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    justify-content: center;
+    margin: 12px 0;
+    flex-wrap: wrap;
+}
+
+.roi-controls label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.roi-controls input[type="number"] {
+    width: 70px;
+    padding: 4px 8px;
+    background: #16213e;
+    border: 1px solid #444;
+    color: #e0e0e0;
+    border-radius: 4px;
+}
+
+.btn {
+    background: #e94560;
+    color: white;
+    border: none;
+    padding: 10px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1em;
+    font-weight: 600;
+    transition: background 0.2s;
+}
+
+.btn:hover {
+    background: #ff6b81;
+}
+
+.btn:disabled {
+    background: #555;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: #16213e;
+    border: 1px solid #e94560;
+}
+
+.btn-secondary:hover {
+    background: #1f2b4d;
+}
+
+.center-row {
+    text-align: center;
+    margin: 16px 0;
+}
+
+/* Phase 3: Tournament */
+.size-slider-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.size-slider-row label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #aaa;
+    font-size: 0.9em;
+}
+
+.size-slider-row input[type="range"] {
+    width: 200px;
+    accent-color: #e94560;
+}
+
+#img-size-label {
+    color: #888;
+    font-size: 0.85em;
+    min-width: 50px;
+}
+
+#tournament-area {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+#comparison-display {
+    flex: 1;
+    min-width: 300px;
+    text-align: center;
+}
+
+#comparison-images {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+}
+
+.comp-view {
+    width: 100%;
+}
+
+.comp-view-label {
+    font-size: 0.8em;
+    color: #888;
+    margin-bottom: 2px;
+}
+
+.comparison-img {
+    height: auto;
+    border: 3px solid #333;
+    border-radius: 8px;
+    image-rendering: pixelated;
+    cursor: zoom-in;
+    transition: transform 0.15s ease;
+}
+
+.comparison-img.zoomed {
+    cursor: zoom-out;
+    transform-origin: center center;
+    transform: scale(2);
+    position: relative;
+    z-index: 10;
+}
+
+.comparison-img.active-left {
+    border-color: #4ecdc4;
+}
+
+.comparison-img.active-right {
+    border-color: #ff6b6b;
+}
+
+#epoch-label {
+    font-size: 1.4em;
+    font-weight: 700;
+    margin: 8px 0 12px;
+    min-height: 1.6em;
+}
+
+#epoch-label .label-left {
+    color: #4ecdc4;
+}
+
+#epoch-label .label-right {
+    color: #ff6b6b;
+}
+
+#metrics-panel {
+    width: 320px;
+    flex-shrink: 0;
+}
+
+#metrics-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+}
+
+#metrics-table th, #metrics-table td {
+    padding: 6px 10px;
+    text-align: right;
+    border-bottom: 1px solid #333;
+}
+
+#metrics-table th {
+    text-align: left;
+    color: #aaa;
+    font-weight: 600;
+}
+
+#metrics-table th:first-child {
+    text-align: left;
+}
+
+#metrics-table td:first-child {
+    text-align: left;
+    font-weight: 500;
+}
+
+.metric-winner {
+    color: #4eff4e;
+    font-weight: 700;
+}
+
+.metric-loser {
+    color: #888;
+}
+
+.metric-highlight td:first-child {
+    color: #ffd93d;
+}
+
+#progress-bar-container {
+    width: 100%;
+    max-width: 400px;
+    margin: 16px auto;
+    background: #16213e;
+    border-radius: 8px;
+    overflow: hidden;
+    height: 24px;
+    position: relative;
+}
+
+#progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #e94560, #ff6b81);
+    transition: width 0.3s;
+    border-radius: 8px;
+}
+
+#progress-text {
+    position: absolute;
+    width: 100%;
+    text-align: center;
+    line-height: 24px;
+    font-size: 0.85em;
+    font-weight: 600;
+    top: 0;
+}
+
+#keyboard-hints {
+    text-align: center;
+    margin-top: 20px;
+    padding: 16px;
+    background: #16213e;
+    border-radius: 8px;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+#keyboard-hints .hint-row {
+    display: inline-block;
+    margin: 4px 12px;
+}
+
+#keyboard-hints kbd {
+    background: #333;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-family: monospace;
+    font-size: 0.95em;
+}
+
+/* Phase 4: Results */
+#results-section {
+    max-width: 900px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+#results-section h2 {
+    color: #e94560;
+    margin-bottom: 20px;
+}
+
+.results-podium {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin-bottom: 30px;
+    flex-wrap: wrap;
+}
+
+.podium-item {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+    min-width: 150px;
+}
+
+.podium-item .rank {
+    font-size: 2em;
+    font-weight: 800;
+}
+
+.podium-item .epoch-num {
+    font-size: 1.3em;
+    margin: 8px 0;
+    font-weight: 600;
+}
+
+.podium-item:nth-child(1) { border: 2px solid gold; }
+.podium-item:nth-child(1) .rank { color: gold; }
+
+.podium-item:nth-child(2) { border: 2px solid silver; }
+.podium-item:nth-child(2) .rank { color: silver; }
+
+.podium-item:nth-child(3) { border: 2px solid #cd7f32; }
+.podium-item:nth-child(3) .rank { color: #cd7f32; }
+
+#full-ranking-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+    font-size: 0.85em;
+}
+
+#full-ranking-table th, #full-ranking-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #333;
+    text-align: right;
+}
+
+#full-ranking-table th {
+    text-align: left;
+    color: #aaa;
+}
+
+#full-ranking-table td:first-child,
+#full-ranking-table th:first-child {
+    text-align: left;
+}
+
+.results-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    margin-top: 24px;
+    flex-wrap: wrap;
+}
