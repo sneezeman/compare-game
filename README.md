@@ -5,7 +5,8 @@ A web-based tool for visually ranking 3D reconstruction epochs. Upload GIF anima
 ## Quick Start
 
 ```bash
-cd compare_tool
+git clone https://github.com/sneezeman/compare-game/
+cd compare-game/compare_tool
 pip install -r requirements.txt
 python app.py --data-dir ..
 ```
