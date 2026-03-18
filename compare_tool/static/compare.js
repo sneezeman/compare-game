@@ -55,33 +55,8 @@ function showPhase(phase) {
 // =========================================================================
 
 function initUpload() {
-    const zone = document.getElementById('upload-zone');
-    const fileInput = document.getElementById('file-input');
-
-    zone.addEventListener('click', () => fileInput.click());
-
-    zone.addEventListener('dragover', e => {
-        e.preventDefault();
-        zone.classList.add('dragover');
-    });
-    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
-
-    zone.addEventListener('drop', e => {
-        e.preventDefault();
-        zone.classList.remove('dragover');
-        for (const f of e.dataTransfer.files) {
-            uploadFile(f);
-        }
-    });
-
-    fileInput.addEventListener('change', () => {
-        for (const f of fileInput.files) {
-            uploadFile(f);
-        }
-        fileInput.value = '';
-    });
-
     loadPreloaded();
+    loadPastResults();
 }
 
 async function loadPreloaded() {
@@ -105,6 +80,9 @@ async function loadPreloaded() {
             const dirName = parts.join('/');
             const div = document.createElement('div');
             div.className = 'upload-item';
+            const doneClass = exp.has_results ? ' upload-item-done' : '';
+            const doneBadge = exp.has_results ? '<span class="done-badge">done</span>' : '';
+            div.className = 'upload-item' + doneClass;
             div.innerHTML = `
                 <label class="checkbox-label">
                     <input type="checkbox" class="exp-checkbox" data-exp-id="${exp.exp_id}"
@@ -112,7 +90,7 @@ async function loadPreloaded() {
                            data-height="${exp.height}" data-filename="${exp.filename}">
                 </label>
                 <div class="exp-info-text">
-                    <span class="filename">${viewFile}</span>
+                    <span class="filename">${viewFile} ${doneBadge}</span>
                     <span class="info">${dirName}</span>
                     <span class="info">${exp.num_epochs} epochs, ${exp.width}x${exp.height}</span>
                 </div>
@@ -127,6 +105,41 @@ async function loadPreloaded() {
     }
 }
 
+async function loadPastResults() {
+    try {
+        const resp = await fetch('/api/past-results');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const section = document.getElementById('past-results-section');
+        const list = document.getElementById('past-results-list');
+
+        if (!data.results || data.results.length === 0) {
+            section.style.display = 'none';
+            return;
+        }
+
+        section.style.display = 'block';
+        list.innerHTML = '';
+        data.results.forEach(r => {
+            const div = document.createElement('div');
+            div.className = 'past-result-item';
+            const dateStr = r.date ? new Date(r.date).toLocaleString() : r.filename;
+            const gifsStr = r.gifs.map(g => g.split('/').pop()).join(', ');
+            div.innerHTML = `
+                <div class="past-result-info">
+                    <span class="past-result-date">${dateStr}</span>
+                    <span class="past-result-gifs">${gifsStr}</span>
+                    <span class="past-result-top3">${r.top3 || ''}</span>
+                </div>
+                <a href="/api/past-results/${r.filename}" class="btn btn-secondary" style="padding: 4px 12px; font-size: 0.8em;">Download</a>
+            `;
+            list.appendChild(div);
+        });
+    } catch (e) {
+        // ignore
+    }
+}
+
 function updateStartButton() {
     const checked = document.querySelectorAll('.exp-checkbox:checked');
     const btn = document.getElementById('start-selected-btn');
@@ -134,34 +147,6 @@ function updateStartButton() {
     btn.textContent = checked.length === 0
         ? 'Select GIFs to compare'
         : `Continue with ${checked.length} GIF${checked.length > 1 ? 's' : ''}`;
-}
-
-async function uploadFile(file) {
-    if (!file.name.toLowerCase().endsWith('.gif')) return;
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const resp = await fetch('/api/upload', { method: 'POST', body: formData });
-    const data = await resp.json();
-    if (data.error) { alert(data.error); return; }
-
-    const list = document.getElementById('upload-list');
-    const div = document.createElement('div');
-    div.className = 'upload-item';
-    div.innerHTML = `
-        <label class="checkbox-label">
-            <input type="checkbox" class="exp-checkbox" data-exp-id="${data.exp_id}"
-                   data-num-epochs="${data.num_epochs}" data-width="${data.width}"
-                   data-height="${data.height}" data-filename="${data.filename}" checked>
-        </label>
-        <div class="exp-info-text">
-            <span class="filename">${data.filename}</span>
-            <span class="info">${data.num_epochs} epochs, ${data.width}x${data.height}</span>
-        </div>
-    `;
-    list.appendChild(div);
-    list.addEventListener('change', updateStartButton);
-    updateStartButton();
 }
 
 async function startWithSelected() {

@@ -4,20 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Compare Game - Epoch Comparison Tool</title>
-    <link rel="stylesheet" href="/static/style.css?v=6">
+    <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
     <h1>Compare Game</h1>
 
     <!-- Phase 1: Upload & Selection -->
     <div id="phase-upload" class="phase active">
-        <div id="upload-zone">
-            <p>Drop GIF(s) here or click to upload</p>
-            <p class="hint">Grayscale GIFs with multiple epochs as frames</p>
-        </div>
-        <input type="file" id="file-input" accept=".gif" multiple>
-        <div id="upload-list"></div>
-
         <div id="preloaded-section" style="display: none;">
             <h3>Available experiments</h3>
             <div id="preloaded-list"></div>
@@ -27,6 +20,11 @@
             <button id="start-selected-btn" class="btn" disabled onclick="startWithSelected()">
                 Select GIFs to compare
             </button>
+        </div>
+
+        <div id="past-results-section" style="display: none;">
+            <h3>Past Results</h3>
+            <div id="past-results-list"></div>
         </div>
     </div>
 
@@ -132,6 +130,6 @@
         </div>
     </div>
 
-    <script src="/static/compare.js?v=6"></script>
+    <script src="/static/compare.js?v=7"></script>
 </body>
 </html>

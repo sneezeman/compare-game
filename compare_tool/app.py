@@ -6,7 +6,6 @@ import argparse
 import io
 import os
 import re
-import tempfile
 import uuid
 from datetime import datetime
 
@@ -27,6 +26,10 @@ experiments = {}
 tournaments = {}
 # Metrics cache: (exp_id, epoch, roi, r_o) -> metrics list
 _metrics_cache = {}
+# Past results: [{filename, date, gifs, roi, top3, path}, ...]
+past_results = []
+# Set of filenames that have completed comparisons
+completed_gifs = set()
 # Results save directory (set in __main__)
 results_dir = 'results'
 
@@ -122,7 +125,7 @@ def index():
 
 @app.route('/api/experiments')
 def list_experiments():
-    """List all loaded experiments."""
+    """List all loaded experiments with completion status."""
     result = []
     for exp_id, exp in experiments.items():
         result.append({
@@ -131,65 +134,27 @@ def list_experiments():
             'num_epochs': exp['num_epochs'],
             'height': exp['height'],
             'width': exp['width'],
+            'has_results': exp['filename'] in completed_gifs,
         })
     return jsonify(experiments=result)
 
 
-@app.route('/api/upload', methods=['POST'])
-def upload():
-    """Accept GIF file(s), extract frames, return experiment ID."""
-    if 'file' not in request.files:
-        return jsonify(error='No file uploaded'), 400
+@app.route('/api/past-results')
+def list_past_results():
+    """List all past tournament results."""
+    return jsonify(results=past_results)
 
-    f = request.files['file']
-    if not f.filename.lower().endswith('.gif'):
-        return jsonify(error='Only GIF files are supported'), 400
 
-    exp_id = str(uuid.uuid4())[:8]
-
-    # Save temporarily and extract frames
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix='.gif', prefix=f'{exp_id}_')
-    os.close(tmp_fd)
-    f.save(tmp_path)
-
-    frames = extract_frames(tmp_path)
-    os.remove(tmp_path)
-
-    if len(frames) < 2:
-        return jsonify(error='GIF must have at least 2 frames'), 400
-
-    variability = compute_variability_map(frames)
-
-    # Try parsing epoch config from uploaded filename
-    parsed = parse_epoch_config_from_name(f.filename)
-    if parsed:
-        epoch_config = {**parsed, 'source': 'filename'}
-        labels = generate_epoch_labels(
-            len(frames), parsed.get('start'), parsed.get('end'),
-            parsed.get('step'), parsed.get('raw_first', False),
-        )
-    else:
-        epoch_config = {'source': 'default'}
-        labels = [f'Ep.{i + 1}' for i in range(len(frames))]
-
-    experiments[exp_id] = {
-        'filename': f.filename,
-        'frames': frames,
-        'variability': variability,
-        'num_epochs': len(frames),
-        'height': frames[0].shape[0],
-        'width': frames[0].shape[1],
-        'epoch_config': epoch_config,
-        'epoch_labels': labels,
-    }
-
-    return jsonify(
-        exp_id=exp_id,
-        filename=f.filename,
-        num_epochs=len(frames),
-        height=frames[0].shape[0],
-        width=frames[0].shape[1],
-    )
+@app.route('/api/past-results/<filename>')
+def get_past_result(filename):
+    """Download a past result TSV file."""
+    import os.path
+    safe_name = os.path.basename(filename)
+    path = os.path.join(results_dir, safe_name)
+    if not os.path.isfile(path):
+        return jsonify(error='Result not found'), 404
+    return send_file(path, mimetype='text/tab-separated-values',
+                     as_attachment=True, download_name=safe_name)
 
 
 @app.route('/api/frame/<exp_id>/<int:epoch>')
@@ -673,6 +638,10 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
             f.write('\n'.join(lines) + '\n')
 
         print(f'Results saved to {save_path}')
+
+        # Refresh tracking
+        scan_past_results()
+
         return save_path
     except Exception as e:
         print(f'Warning: could not save results: {e}')
@@ -710,6 +679,48 @@ def _ensure_loaded(exp_id):
         )
     print(f'  Loaded {exp["filename"]} ({len(frames)} epochs, {exp["width"]}x{exp["height"]})')
     return exp
+
+
+def scan_past_results():
+    """Scan results directory for past tournament TSVs and track which GIFs were compared."""
+    global past_results, completed_gifs
+    past_results = []
+    completed_gifs = set()
+
+    if not os.path.isdir(results_dir):
+        return
+
+    import glob as glob_mod
+    for tsv_path in sorted(glob_mod.glob(os.path.join(results_dir, '*.tsv')), reverse=True):
+        try:
+            with open(tsv_path) as f:
+                lines = f.readlines()
+
+            info = {
+                'filename': os.path.basename(tsv_path),
+                'date': '',
+                'gifs': [],
+                'roi': '',
+                'top3': '',
+            }
+            for line in lines[:15]:
+                line = line.strip()
+                if line.startswith('Date:'):
+                    info['date'] = line[5:].strip()
+                elif line.startswith('GIFs:'):
+                    info['gifs'] = [g.strip() for g in line[5:].split(',')]
+                    for g in info['gifs']:
+                        completed_gifs.add(g)
+                elif line.startswith('ROI:'):
+                    info['roi'] = line[4:].strip()
+                elif line.startswith('Top 3:'):
+                    info['top3'] = line[6:].strip()
+
+            past_results.append(info)
+        except Exception:
+            continue
+
+    print(f'  Found {len(past_results)} past result(s)')
 
 
 def load_data_dir(data_dir, cli_config=None):
@@ -801,5 +812,8 @@ if __name__ == '__main__':
     print(f'Scanning GIFs from {args.data_dir}...')
     load_data_dir(args.data_dir, cli_epoch_config)
     print(f'Found {len(experiments)} experiment(s)')
+
+    print(f'Scanning past results from {results_dir}...')
+    scan_past_results()
 
     app.run(host=args.host, port=args.port, debug=False, threaded=True)
