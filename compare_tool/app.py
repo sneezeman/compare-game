@@ -813,6 +813,10 @@ if __name__ == '__main__':
                         help='Directory to save results (default: DATA_DIR/results)')
     parser.add_argument('--port', type=int, default=5000)
     parser.add_argument('--host', type=str, default='127.0.0.1')
+    parser.add_argument('--ssl-cert', type=str, default=None,
+                        help='Path to SSL certificate file for HTTPS')
+    parser.add_argument('--ssl-key', type=str, default=None,
+                        help='Path to SSL private key file for HTTPS')
     args = parser.parse_args()
 
     cli_epoch_config = {}
@@ -834,4 +838,9 @@ if __name__ == '__main__':
     print(f'Scanning past results from {results_dir}...')
     scan_past_results()
 
-    app.run(host=args.host, port=args.port, debug=False, threaded=True)
+    ssl_ctx = None
+    if args.ssl_cert and args.ssl_key:
+        ssl_ctx = (args.ssl_cert, args.ssl_key)
+
+    app.run(host=args.host, port=args.port, debug=False, threaded=True,
+            ssl_context=ssl_ctx)
