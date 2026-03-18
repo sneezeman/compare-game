@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Compare Game - Epoch Comparison Tool</title>
-    <link rel="stylesheet" href="/static/style.css?v=8">
+    <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
     <h1>Compare Game</h1>
@@ -16,7 +16,10 @@
             <div id="preloaded-list"></div>
         </div>
 
-        <div class="center-row" style="margin-top: 20px;">
+        <div class="center-row" style="margin-top: 20px; display: flex; justify-content: center; align-items: center; gap: 12px;">
+            <label style="color: #ccc;">Your name:
+                <input type="text" id="user-name" placeholder="e.g. Artem" style="width: 120px; padding: 6px 10px; background: #16213e; border: 1px solid #444; border-radius: 6px; color: #eee;">
+            </label>
             <button id="start-selected-btn" class="btn" disabled onclick="startWithSelected()">
                 Select GIFs to compare
             </button>
@@ -130,6 +133,6 @@
         </div>
     </div>
 
-    <script src="/static/compare.js?v=8"></script>
+    <script src="/static/compare.js?v=9"></script>
 </body>
 </html>

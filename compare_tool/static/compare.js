@@ -113,7 +113,10 @@ async function loadPreloaded() {
 
             tree[dirPath].forEach(exp => {
                 const doneClass = exp.has_results ? ' upload-item-done' : '';
-                const doneBadge = exp.has_results ? '<span class="done-badge">done</span>' : '';
+                const doneBy = exp.done_by || '';
+                const doneBadge = exp.has_results
+                    ? `<span class="done-badge">${doneBy ? 'done by ' + doneBy : 'done'}</span>`
+                    : '';
                 const div = document.createElement('div');
                 div.className = 'upload-item' + doneClass;
                 div.innerHTML = `
@@ -222,6 +225,14 @@ function updateStartButton() {
 async function startWithSelected() {
     const checked = document.querySelectorAll('.exp-checkbox:checked');
     if (checked.length === 0) return;
+
+    const userName = document.getElementById('user-name').value.trim();
+    if (!userName) {
+        alert('Please enter your name before starting.');
+        document.getElementById('user-name').focus();
+        return;
+    }
+    state.userName = userName;
 
     const selected = [];
     checked.forEach(cb => {
@@ -568,7 +579,7 @@ async function startTournament() {
     const resp = await fetch('/api/tournament/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ experiments: expsConfig, roi: state.roi, r_o: state.rO }),
+        body: JSON.stringify({ experiments: expsConfig, roi: state.roi, r_o: state.rO, user_name: state.userName }),
     });
     const data = await resp.json();
 

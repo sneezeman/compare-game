@@ -46,8 +46,8 @@ tournaments = {}
 _metrics_cache = {}
 # Past results: [{filename, date, gifs, roi, top3, path}, ...]
 past_results = []
-# Set of filenames that have completed comparisons
-completed_gifs = set()
+# Filenames that have completed comparisons: {gif_filename: user_name}
+completed_gifs = {}
 # Results save directory (set in __main__)
 results_dir = 'results'
 
@@ -153,6 +153,7 @@ def list_experiments():
             'height': exp['height'],
             'width': exp['width'],
             'has_results': exp['filename'] in completed_gifs,
+            'done_by': completed_gifs.get(exp['filename'], ''),
         })
     return jsonify(experiments=result)
 
@@ -287,6 +288,7 @@ def start_tournament():
     exps_config = data.get('experiments', [])
     r_o = float(data.get('r_o', 0.5))
     roi = data.get('roi')
+    user_name = data.get('user_name', '')
 
     if not exps_config:
         return jsonify(error='No experiments specified'), 400
@@ -325,6 +327,7 @@ def start_tournament():
         'candidates': candidates,
         'roi': roi,
         'r_o': r_o,
+        'user_name': user_name,
     }
 
     pair = t.current_pair()
@@ -579,6 +582,7 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
         t = tdata['tournament']
         roi = tdata.get('roi')
         r_o = tdata.get('r_o', 0.5)
+        user_name = tdata.get('user_name', '')
 
         exp_ids = []
         for c in ranking:
@@ -589,6 +593,7 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
         lines = []
         lines.append('Compare Game \u2014 Tournament Results')
         lines.append(f'Date: {datetime.now().isoformat()}')
+        lines.append(f'User: {user_name}')
         lines.append(f'Model: Merge-sort tournament')
         lines.append(f'GIFs: {", ".join(gif_names)}')
         lines.append(f'OTF radius: {r_o}')
@@ -703,7 +708,7 @@ def scan_past_results():
     """Scan results directory for past tournament TSVs and track which GIFs were compared."""
     global past_results, completed_gifs
     past_results = []
-    completed_gifs = set()
+    completed_gifs = {}
 
     if not os.path.isdir(results_dir):
         return
@@ -717,6 +722,7 @@ def scan_past_results():
             info = {
                 'filename': os.path.basename(tsv_path),
                 'date': '',
+                'user': '',
                 'gifs': [],
                 'roi': '',
                 'top3': '',
@@ -725,10 +731,12 @@ def scan_past_results():
                 line = line.strip()
                 if line.startswith('Date:'):
                     info['date'] = line[5:].strip()
+                elif line.startswith('User:'):
+                    info['user'] = line[5:].strip()
                 elif line.startswith('GIFs:'):
                     info['gifs'] = [g.strip() for g in line[5:].split(',')]
                     for g in info['gifs']:
-                        completed_gifs.add(g)
+                        completed_gifs[g] = info.get('user', '')
                 elif line.startswith('ROI:'):
                     info['roi'] = line[4:].strip()
                 elif line.startswith('Top 3:'):
