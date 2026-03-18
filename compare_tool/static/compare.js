@@ -74,35 +74,105 @@ async function loadPreloaded() {
 
         section.style.display = 'block';
         list.innerHTML = '';
+
+        // Group experiments by directory path
+        const tree = {};
         data.experiments.forEach(exp => {
             const parts = exp.filename.split('/');
             const viewFile = parts.pop();
-            const dirName = parts.join('/');
-            const div = document.createElement('div');
-            div.className = 'upload-item';
-            const doneClass = exp.has_results ? ' upload-item-done' : '';
-            const doneBadge = exp.has_results ? '<span class="done-badge">done</span>' : '';
-            div.className = 'upload-item' + doneClass;
-            div.innerHTML = `
+            const dirPath = parts.join('/') || '.';
+            if (!tree[dirPath]) tree[dirPath] = [];
+            tree[dirPath].push({ ...exp, viewFile });
+        });
+
+        // Sort directories
+        const sortedDirs = Object.keys(tree).sort();
+
+        sortedDirs.forEach(dirPath => {
+            const dirDiv = document.createElement('div');
+            dirDiv.className = 'dir-group';
+
+            // Directory header with toggle and select-all
+            const header = document.createElement('div');
+            header.className = 'dir-header';
+            const dirId = 'dir-' + dirPath.replace(/[^a-zA-Z0-9]/g, '_');
+            header.innerHTML = `
+                <span class="dir-toggle" onclick="toggleDir('${dirId}')">&#9660;</span>
                 <label class="checkbox-label">
-                    <input type="checkbox" class="exp-checkbox" data-exp-id="${exp.exp_id}"
-                           data-num-epochs="${exp.num_epochs}" data-width="${exp.width}"
-                           data-height="${exp.height}" data-filename="${exp.filename}">
+                    <input type="checkbox" class="dir-checkbox" data-dir="${dirId}"
+                        onchange="toggleDirCheckboxes('${dirId}', this.checked)">
                 </label>
-                <div class="exp-info-text">
-                    <span class="filename">${viewFile} ${doneBadge}</span>
-                    <span class="info">${dirName}</span>
-                    <span class="info">${exp.num_epochs} epochs, ${exp.width}x${exp.height}</span>
-                </div>
+                <span class="dir-name" onclick="toggleDir('${dirId}')">${dirPath}</span>
             `;
-            list.appendChild(div);
+            dirDiv.appendChild(header);
+
+            // GIF list within directory
+            const contents = document.createElement('div');
+            contents.className = 'dir-contents';
+            contents.id = dirId;
+
+            tree[dirPath].forEach(exp => {
+                const doneClass = exp.has_results ? ' upload-item-done' : '';
+                const doneBadge = exp.has_results ? '<span class="done-badge">done</span>' : '';
+                const div = document.createElement('div');
+                div.className = 'upload-item' + doneClass;
+                div.innerHTML = `
+                    <label class="checkbox-label">
+                        <input type="checkbox" class="exp-checkbox" data-exp-id="${exp.exp_id}"
+                               data-num-epochs="${exp.num_epochs}" data-width="${exp.width}"
+                               data-height="${exp.height}" data-filename="${exp.filename}"
+                               data-dir="${dirId}">
+                    </label>
+                    <div class="exp-info-text">
+                        <span class="filename">${exp.viewFile} ${doneBadge}</span>
+                        <span class="info">${exp.num_epochs} epochs, ${exp.width}x${exp.height}</span>
+                    </div>
+                `;
+                contents.appendChild(div);
+            });
+
+            dirDiv.appendChild(contents);
+            list.appendChild(dirDiv);
         });
 
         updateStartButton();
-        list.addEventListener('change', updateStartButton);
+        list.addEventListener('change', (e) => {
+            if (e.target.classList.contains('exp-checkbox')) {
+                syncDirCheckbox(e.target.dataset.dir);
+            }
+            updateStartButton();
+        });
     } catch (e) {
         // ignore
     }
+}
+
+function toggleDir(dirId) {
+    const contents = document.getElementById(dirId);
+    const toggle = contents.parentElement.querySelector('.dir-toggle');
+    if (contents.classList.contains('collapsed')) {
+        contents.classList.remove('collapsed');
+        toggle.innerHTML = '&#9660;';
+    } else {
+        contents.classList.add('collapsed');
+        toggle.innerHTML = '&#9654;';
+    }
+}
+
+function toggleDirCheckboxes(dirId, checked) {
+    const contents = document.getElementById(dirId);
+    contents.querySelectorAll('.exp-checkbox').forEach(cb => { cb.checked = checked; });
+    updateStartButton();
+}
+
+function syncDirCheckbox(dirId) {
+    if (!dirId) return;
+    const contents = document.getElementById(dirId);
+    const all = contents.querySelectorAll('.exp-checkbox');
+    const checkedCount = contents.querySelectorAll('.exp-checkbox:checked').length;
+    const dirCb = contents.parentElement.querySelector('.dir-checkbox');
+    dirCb.checked = checkedCount === all.length;
+    dirCb.indeterminate = checkedCount > 0 && checkedCount < all.length;
 }
 
 async function loadPastResults() {

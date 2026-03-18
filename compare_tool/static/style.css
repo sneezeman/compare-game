@@ -532,6 +532,50 @@ h1 {
     margin-bottom: 12px;
 }
 
+/* Directory tree */
+.dir-group {
+    margin-bottom: 12px;
+}
+
+.dir-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: #0f1a33;
+    border-radius: 8px 8px 0 0;
+    cursor: pointer;
+}
+
+.dir-toggle {
+    color: #888;
+    font-size: 0.8em;
+    width: 16px;
+    text-align: center;
+    user-select: none;
+}
+
+.dir-name {
+    font-weight: 600;
+    color: #ccc;
+    font-size: 0.95em;
+    flex: 1;
+}
+
+.dir-contents {
+    border-left: 2px solid #0f1a33;
+    margin-left: 12px;
+    padding-left: 8px;
+}
+
+.dir-contents.collapsed {
+    display: none;
+}
+
+.dir-contents .upload-item {
+    border-radius: 4px;
+}
+
 /* Completion tracking */
 .upload-item-done {
     border-left: 3px solid #4ecdc4;
