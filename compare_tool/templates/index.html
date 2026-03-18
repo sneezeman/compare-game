@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Compare Game - Epoch Comparison Tool</title>
-    <link rel="stylesheet" href="/static/style.css?v=4">
+    <link rel="stylesheet" href="/static/style.css?v=6">
 </head>
 <body>
     <h1>Compare Game</h1>
@@ -30,6 +30,20 @@
         </div>
     </div>
 
+    <!-- Phase 1.5: Epoch Configuration -->
+    <div id="phase-epoch-config" class="phase">
+        <h3 class="center-row">Epoch Configuration</h3>
+        <p class="center-row" style="color: #888; margin-bottom: 16px;">
+            Configure how epoch numbers map to GIF frames, or skip to use frame numbers.
+        </p>
+        <div id="epoch-config-form"></div>
+        <div class="center-row" style="margin-top: 20px; gap: 10px; display: flex; justify-content: center;">
+            <button class="btn btn-secondary" onclick="showPhase('upload')">Back</button>
+            <button class="btn" onclick="submitEpochConfig()">Apply & Continue</button>
+            <button class="btn btn-secondary" onclick="skipEpochConfig()">Skip</button>
+        </div>
+    </div>
+
     <!-- Phase 2: ROI Selection -->
     <div id="phase-roi" class="phase">
         <h3 id="roi-title" class="center-row" style="margin-bottom: 8px;"></h3>
@@ -45,8 +59,10 @@
             <button class="btn btn-secondary" onclick="showPhase('upload')">Back</button>
         </div>
 
+        <div id="roi-suggestions" class="center-row" style="margin-bottom: 8px;"></div>
+
         <p class="center-row" style="color: #888; margin-bottom: 8px;">
-            Click and drag to select a region of interest. The heatmap highlights areas with the most variation across epochs.
+            Click and drag to select a region of interest, or pick a suggestion above. The heatmap highlights areas with the most variation across epochs.
         </p>
 
         <div class="center-row">
@@ -89,11 +105,14 @@
             </div>
         </div>
 
+        <div id="tie-explanation" class="tie-explanation" style="display:none;"></div>
+
         <div id="keyboard-hints">
             <div class="hint-row"><kbd>&larr;</kbd> / <kbd>&rarr;</kbd> Switch images</div>
             <div class="hint-row"><kbd>Space</kbd> <kbd>Space</kbd> Select winner</div>
             <div class="hint-row"><kbd>Enter</kbd> Tie (metrics decide)</div>
             <div class="hint-row"><kbd>Ctrl+Z</kbd> Undo</div>
+            <div class="hint-row"><kbd>Esc</kbd> Finish early</div>
         </div>
     </div>
 
@@ -113,6 +132,6 @@
         </div>
     </div>
 
-    <script src="/static/compare.js?v=4"></script>
+    <script src="/static/compare.js?v=6"></script>
 </body>
 </html>

@@ -309,6 +309,74 @@ def wavelet_energy_ratio(img, levels=3):
 
 
 # ---------------------------------------------------------------------------
+# Cryo-ET specific metrics
+# ---------------------------------------------------------------------------
+
+def log_response(img, sigmas=(1, 2, 4)):
+    """Laplacian-of-Gaussian multi-scale response.
+    Detects sparse structural features at multiple scales.
+    Higher = more distinct features preserved."""
+    from scipy.ndimage import gaussian_laplace
+    total = 0.0
+    for sigma in sigmas:
+        log = gaussian_laplace(img, sigma)
+        total += np.mean(np.abs(log)) * sigma ** 2  # scale-normalize
+    return float(total / len(sigmas))
+
+
+def noise_estimate(img):
+    """High-order derivative noise estimate.
+    Very smooth (over-denoised) images have near-zero values.
+    Moderate values indicate preserved detail without excessive noise."""
+    # 4th derivative approximation via double Laplacian
+    lap_kernel = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.float64)
+    lap1 = convolve(img, lap_kernel, mode='reflect')
+    lap2 = convolve(lap1, lap_kernel, mode='reflect')
+    return float(np.mean(np.abs(lap2)))
+
+
+def contrast_consistency(img):
+    """Intensity histogram spread (IQR-based).
+    Measures preservation of contrast range.
+    Narrowing histogram indicates over-smoothing."""
+    q75, q25 = np.percentile(img, [75, 25])
+    iqr = q75 - q25
+    if iqr < 1e-10:
+        return 0.0
+    # Normalize by full range to get relative spread
+    full_range = img.max() - img.min()
+    if full_range < 1e-10:
+        return 0.0
+    return float(iqr / full_range)
+
+
+# ---------------------------------------------------------------------------
+# Normalization helper
+# ---------------------------------------------------------------------------
+
+def compute_metric_zscores(all_candidate_metrics):
+    """Compute z-scores for each metric across all candidates.
+    Input: list of [(name, value, hib), ...] per candidate.
+    Returns: list of [(name, zscore, hib), ...] per candidate."""
+    n = len(all_candidate_metrics)
+    if n < 2:
+        return all_candidate_metrics
+    num_metrics = len(all_candidate_metrics[0])
+    result = []
+    for i in range(n):
+        zscored = []
+        for mi in range(num_metrics):
+            name, val, hib = all_candidate_metrics[i][mi]
+            vals = [all_candidate_metrics[j][mi][1] for j in range(n)]
+            mean = np.mean(vals)
+            std = np.std(vals)
+            z = (val - mean) / std if std > 1e-10 else 0.0
+            zscored.append((name, z, hib))
+        result.append(zscored)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Convenience: compute all metrics
 # ---------------------------------------------------------------------------
 
@@ -335,6 +403,10 @@ METRICS = [
     # Wavelet
     ("NHWTSE", nhwtse, True),
     ("Wavelet E.R.", wavelet_energy_ratio, True),
+    # Cryo-ET specific
+    ("LoG Response", log_response, True),
+    ("Noise Est.", noise_estimate, True),
+    ("Contrast Con.", contrast_consistency, True),
 ]
 
 # Metrics that take r_o parameter

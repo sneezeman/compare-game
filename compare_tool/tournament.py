@@ -4,6 +4,7 @@ Supports undo via an explicit state stack.
 """
 
 import math
+from datetime import datetime
 
 
 class Tournament:
@@ -11,9 +12,11 @@ class Tournament:
         """items: list of epoch indices to rank."""
         self.items = list(items)
         self.n = len(self.items)
+        # Choice history for logging
+        self.history = []
         # sorted sublists that get merged pairwise
         self.sublists = [[x] for x in self.items]
-        self.top_k = min(3, self.n)
+        self.top_k = min(1, self.n)
         # estimate total comparisons
         self.estimated_total = self._estimate_comparisons()
         self.comparison_count = 0
@@ -39,12 +42,18 @@ class Tournament:
         self._advance_to_next_comparison()
 
     def _estimate_comparisons(self):
-        """Estimate comparisons for partial merge sort to find top-3."""
+        """Estimate comparisons for partial merge sort.
+        With top_k=1, the last merge of two n/2-sized sorted lists
+        needs only top_k comparisons instead of ~n. Earlier rounds
+        are full merges: each round merges pairs fully."""
         n = self.n
-        if n <= 3:
+        if n <= self.top_k:
             return max(0, n - 1)
-        # Full merge sort is n*log2(n), partial is roughly 60-70% of that
-        return int(n * math.log2(n) * 0.65)
+        rounds = int(math.ceil(math.log2(max(n, 2))))
+        # Each round except the last does ~n/2 comparisons on average
+        # Last round: only top_k comparisons (short-circuit)
+        comparisons = (rounds - 1) * n // 2 + self.top_k
+        return max(n - 1, comparisons)
 
     def _prepare_merge_round(self):
         """Pair up sublists for a merge round."""
@@ -181,6 +190,16 @@ class Tournament:
         # Save state for undo
         self._undo_stack.append(self.get_state())
 
+        # Log the choice
+        pair = self.current_pair()
+        if pair:
+            self.history.append({
+                'left': pair[0],
+                'right': pair[1],
+                'winner': winner,
+                'timestamp': datetime.now().isoformat(),
+            })
+
         self.comparison_count += 1
 
         if winner == 'left':
@@ -199,6 +218,8 @@ class Tournament:
             return None
         state = self._undo_stack.pop()
         self.restore_state(state)
+        if self.history:
+            self.history.pop()
         return self.current_pair()
 
     def progress(self):
@@ -210,3 +231,29 @@ class Tournament:
         if self.results is None:
             return None
         return self.results[:self.top_k]
+
+    def get_history(self):
+        """Return full comparison history."""
+        return list(self.history)
+
+    def get_confidence_intervals(self):
+        """Not available for merge-sort tournament."""
+        return {}
+
+    def force_finish(self):
+        """Force tournament to finish with current best ordering."""
+        if self.results is not None:
+            return
+        # Merge remaining sublists as-is (interleave without comparisons)
+        flat = []
+        for sl in self.sublists:
+            flat.extend(sl)
+        # Add any in-progress merge
+        remaining = self._merged + self._left[self._li:] + self._right[self._ri:]
+        if remaining and remaining != flat:
+            flat = remaining
+            for sl in self._new_sublists:
+                flat.extend(sl)
+            if self._leftover:
+                flat.extend(self._leftover)
+        self.results = flat

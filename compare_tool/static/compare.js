@@ -25,16 +25,15 @@ const state = {
 
 function metricColor(t) {
     // t in [0, 1]: 0 = worst (red), 1 = best (green)
-    // Interpolate from #ff4444 (red) through #ffcc44 (yellow) to #44dd44 (green)
     t = Math.max(0, Math.min(1, t));
     let r, g, b;
     if (t < 0.5) {
-        const s = t * 2; // 0..1 for red-to-yellow
+        const s = t * 2;
         r = 255;
         g = Math.round(100 + 155 * s);
         b = 68;
     } else {
-        const s = (t - 0.5) * 2; // 0..1 for yellow-to-green
+        const s = (t - 0.5) * 2;
         r = Math.round(255 - 187 * s);
         g = Math.round(255 - 34 * s);
         b = 68;
@@ -189,7 +188,6 @@ async function startWithSelected() {
     btn.textContent = 'Loading GIFs...';
 
     try {
-        // Trigger lazy load by fetching the first frame of each
         const responses = await Promise.all(selected.map(s =>
             fetch(`/api/first_frame/${s.expId}`)
         ));
@@ -210,6 +208,123 @@ async function startWithSelected() {
 
     btn.disabled = false;
     updateStartButton();
+    showEpochConfig();
+}
+
+// =========================================================================
+// Phase 1.5: Epoch Configuration
+// =========================================================================
+
+function generateLabels(numEpochs, start, end, step, rawFirst) {
+    if (start === null || isNaN(start)) {
+        return Array.from({length: numEpochs}, (_, i) => `Ep.${i + 1}`);
+    }
+
+    const effectiveEpochs = numEpochs - (rawFirst ? 1 : 0);
+    if ((step === null || isNaN(step) || step < 1) && end !== null && !isNaN(end) && effectiveEpochs > 1) {
+        step = Math.floor((end - start) / (effectiveEpochs - 1));
+    }
+    if (step === null || isNaN(step) || step < 1) step = 1;
+
+    const labels = [];
+    for (let i = 0; i < numEpochs; i++) {
+        if (rawFirst && i === 0) {
+            labels.push('RAW');
+        } else {
+            const epochIdx = i - (rawFirst ? 1 : 0);
+            labels.push(`Ep.${start + epochIdx * step}`);
+        }
+    }
+    return labels;
+}
+
+async function showEpochConfig() {
+    showPhase('epoch-config');
+
+    const resp = await fetch('/api/epoch-config');
+    const data = await resp.json();
+
+    const form = document.getElementById('epoch-config-form');
+
+    // Use first selected experiment's config as defaults
+    const firstExpConfig = data.experiments[state.selected[0]?.expId];
+    const config = firstExpConfig?.epoch_config || {};
+    const source = config.source || 'default';
+
+    let sourceText = '';
+    if (source === 'cli') sourceText = 'Pre-filled from command line flags';
+    else if (source === 'filename') sourceText = 'Detected from filename';
+
+    form.innerHTML = `
+        ${sourceText ? `<p class="center-row" style="color: #4ecdc4; margin-bottom: 12px;">${sourceText}</p>` : ''}
+        <div class="epoch-config-fields">
+            <label>First epoch:
+                <input type="number" id="epoch-start" value="${config.start ?? ''}" placeholder="e.g. 100">
+            </label>
+            <label>Last epoch:
+                <input type="number" id="epoch-end" value="${config.end ?? ''}" placeholder="optional">
+            </label>
+            <label>Step:
+                <input type="number" id="epoch-step" value="${config.step ?? ''}" placeholder="default: 1" min="1">
+            </label>
+            <label class="checkbox-label" style="gap: 8px;">
+                <input type="checkbox" id="epoch-raw-first" ${config.raw_first ? 'checked' : ''}>
+                First frame is RAW (no denoising)
+            </label>
+        </div>
+        <div id="epoch-preview"></div>
+    `;
+
+    const updatePreview = () => {
+        const start = document.getElementById('epoch-start').value ? parseInt(document.getElementById('epoch-start').value) : null;
+        const end = document.getElementById('epoch-end').value ? parseInt(document.getElementById('epoch-end').value) : null;
+        const step = document.getElementById('epoch-step').value ? parseInt(document.getElementById('epoch-step').value) : null;
+        const rawFirst = document.getElementById('epoch-raw-first').checked;
+
+        const preview = document.getElementById('epoch-preview');
+        let html = '<h4 style="margin-top: 16px; color: #aaa;">Label preview</h4>';
+        for (const s of state.selected) {
+            const labels = generateLabels(s.numEpochs, start, end, step, rawFirst);
+            const display = labels.length > 10
+                ? labels.slice(0, 4).join(', ') + ', \u2026, ' + labels.slice(-2).join(', ')
+                : labels.join(', ');
+            html += `<div class="preview-row"><span class="filename">${s.filename.split('/').pop()}</span>: ${display}</div>`;
+        }
+        preview.innerHTML = html;
+    };
+
+    ['epoch-start', 'epoch-end', 'epoch-step'].forEach(id => {
+        document.getElementById(id).addEventListener('input', updatePreview);
+    });
+    document.getElementById('epoch-raw-first').addEventListener('change', updatePreview);
+
+    updatePreview();
+}
+
+async function submitEpochConfig() {
+    const start = document.getElementById('epoch-start').value ? parseInt(document.getElementById('epoch-start').value) : null;
+    const end = document.getElementById('epoch-end').value ? parseInt(document.getElementById('epoch-end').value) : null;
+    const step = document.getElementById('epoch-step').value ? parseInt(document.getElementById('epoch-step').value) : null;
+    const rawFirst = document.getElementById('epoch-raw-first').checked;
+
+    if (start !== null) {
+        const config = {};
+        for (const s of state.selected) {
+            config[s.expId] = { start, end, step, raw_first: rawFirst };
+        }
+
+        await fetch('/api/epoch-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ experiments: config }),
+        });
+    }
+
+    showPhase('roi');
+    initROISelection();
+}
+
+function skipEpochConfig() {
     showPhase('roi');
     initROISelection();
 }
@@ -232,6 +347,9 @@ function initROISelection() {
     document.getElementById('roi-info').textContent = '';
     document.getElementById('start-tournament-btn').disabled = true;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Load ROI suggestions
+    loadROISuggestions(current.expId);
 
     // Restore previous ROI if re-entering
     if (state.roi) {
@@ -350,6 +468,45 @@ function initROISelection() {
     document.addEventListener('mouseup', state._roiMouseUp);
 }
 
+async function loadROISuggestions(expId) {
+    const container = document.getElementById('roi-suggestions');
+    try {
+        const resp = await fetch(`/api/roi-suggestions/${expId}`);
+        const data = await resp.json();
+        if (!data.suggestions || data.suggestions.length === 0) {
+            container.innerHTML = '';
+            return;
+        }
+        let html = '<span style="color: #888; font-size: 0.9em;">Suggested ROIs: </span>';
+        data.suggestions.forEach((roi, i) => {
+            html += `<button class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.8em; margin: 2px;"
+                onclick="applyROISuggestion(${roi.x},${roi.y},${roi.w},${roi.h})">
+                ${roi.w}x${roi.h} (score: ${roi.score.toFixed(2)})
+            </button>`;
+        });
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = '';
+    }
+}
+
+function applyROISuggestion(x, y, w, h) {
+    state.roi = `${x},${y},${w},${h}`;
+    document.getElementById('roi-info').textContent = `ROI: ${w}x${h} at (${x}, ${y})`;
+    document.getElementById('start-tournament-btn').disabled = false;
+
+    // Draw the ROI on canvas
+    const canvas = document.getElementById('roi-canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#4ecdc4';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([8, 4]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = 'rgba(78, 205, 196, 0.15)';
+    ctx.fillRect(x, y, w, h);
+}
+
 async function startTournament() {
     const expsConfig = state.selected.map(s => ({ exp_id: s.expId }));
 
@@ -363,7 +520,7 @@ async function startTournament() {
     if (data.error) { alert(data.error); return; }
 
     state.sessionId = data.session_id;
-    state.currentPair = data.pair;  // {left: {exp_id, epoch, label, index}, right: {...}}
+    state.currentPair = data.pair;
     showPhase('tournament');
     updateProgress(data.progress);
     buildComparisonImages();
@@ -441,6 +598,9 @@ function handleTournamentKey(e) {
     } else if (e.ctrlKey && e.key === 'z') {
         e.preventDefault();
         undoChoice();
+    } else if (e.key === 'Escape') {
+        e.preventDefault();
+        finishEarly();
     }
 }
 
@@ -507,14 +667,23 @@ function renderMetricsTable() {
         const aWins = hib ? a.value > b.value : a.value < b.value;
         const bWins = hib ? b.value > a.value : b.value < a.value;
 
-        const aClass = aWins ? 'metric-winner' : (bWins ? 'metric-loser' : '');
-        const bClass = bWins ? 'metric-winner' : (aWins ? 'metric-loser' : '');
+        // Color intensity based on relative difference
+        const maxVal = Math.max(Math.abs(a.value), Math.abs(b.value), 1e-10);
+        const relDiff = Math.abs(a.value - b.value) / maxVal;
+        // Map to 0-1 intensity: sqrt for perceptual scaling, cap at 1
+        const intensity = Math.min(1, Math.sqrt(relDiff * 5));
+
+        const winColor = `rgba(78, 255, 78, ${0.15 + intensity * 0.85})`;
+        const loseColor = `rgba(136, 136, 136, ${0.4 + (1 - intensity) * 0.6})`;
+
+        const aStyle = aWins ? `color:${winColor};font-weight:700` : (bWins ? `color:${loseColor}` : '');
+        const bStyle = bWins ? `color:${winColor};font-weight:700` : (aWins ? `color:${loseColor}` : '');
         const rowClass = a.name === 'NHWTSE' ? 'metric-highlight' : '';
 
         rows += `<tr class="${rowClass}">
             <td>${a.name}</td>
-            <td class="${aClass}">${a.value.toFixed(4)}</td>
-            <td class="${bClass}">${b.value.toFixed(4)}</td>
+            <td style="${aStyle}">${a.value.toFixed(4)}</td>
+            <td style="${bStyle}">${b.value.toFixed(4)}</td>
         </tr>`;
     }
 
@@ -538,14 +707,35 @@ async function submitChoice(winner) {
     const data = await resp.json();
     updateProgress(data.progress);
 
+    // Show tie explanation if present
+    const tieEl = document.getElementById('tie-explanation');
+    if (data.tie_explanation) {
+        tieEl.textContent = data.tie_explanation;
+        tieEl.style.display = 'block';
+        setTimeout(() => { tieEl.style.display = 'none'; }, 3000);
+    } else {
+        tieEl.style.display = 'none';
+    }
+
     if (data.done) {
-        showResults(data.ranking, data.top3);
+        showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
         return;
     }
 
     state.currentPair = data.pair;
     state.spaceCount = 0;
     loadComparison();
+}
+
+async function finishEarly() {
+    if (!state.sessionId) return;
+    if (!confirm('Finish the tournament early with current rankings?')) return;
+
+    const resp = await fetch(`/api/tournament/${state.sessionId}/finish`, { method: 'POST' });
+    const data = await resp.json();
+    if (data.done) {
+        showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
+    }
 }
 
 async function undoChoice() {
@@ -571,11 +761,10 @@ function updateProgress(progress) {
 // Phase 4: Results
 // =========================================================================
 
-async function showResults(ranking, top3) {
+async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
     showPhase('results');
     document.removeEventListener('keydown', handleTournamentKey);
 
-    // ranking and top3 are now arrays of {exp_id, epoch, label} objects
     const podium = document.getElementById('results-podium');
     podium.innerHTML = '';
     const medals = ['1st', '2nd', '3rd'];
@@ -586,16 +775,19 @@ async function showResults(ranking, top3) {
         podium.appendChild(div);
     }
 
-    // Full ranking with metrics
-    const table = document.getElementById('full-ranking-table');
-    const roiParam = state.roi ? `&roi=${state.roi}` : '';
-
-    const allMetrics = [];
-    for (const c of ranking) {
-        const resp = await fetch(`/api/metrics/${c.exp_id}/${c.epoch}?r_o=${state.rO}${roiParam}`);
-        const data = await resp.json();
-        allMetrics.push(data.metrics);
+    // Use server-provided metrics or fetch them
+    let allMetrics = serverMetrics;
+    if (!allMetrics) {
+        allMetrics = [];
+        const roiParam = state.roi ? `&roi=${state.roi}` : '';
+        for (const c of ranking) {
+            const resp = await fetch(`/api/metrics/${c.exp_id}/${c.epoch}?r_o=${state.rO}${roiParam}`);
+            const data = await resp.json();
+            allMetrics.push(data.metrics);
+        }
     }
+
+    const table = document.getElementById('full-ranking-table');
 
     let headers = '<tr><th>Rank</th><th>Candidate</th>';
     const numMetrics = allMetrics.length > 0 ? allMetrics[0].length : 0;
@@ -630,6 +822,17 @@ async function showResults(ranking, top3) {
 
     table.innerHTML = headers + rows;
 
+    // Show save notification
+    const existingNote = document.querySelector('.save-notification');
+    if (existingNote) existingNote.remove();
+    if (savePath) {
+        const saveNote = document.createElement('p');
+        saveNote.className = 'save-notification';
+        saveNote.textContent = `Results auto-saved to ${savePath}`;
+        const resultsSection = document.getElementById('results-section');
+        resultsSection.insertBefore(saveNote, resultsSection.children[1]);
+    }
+
     state.lastResults = { ranking, top3, allMetrics, timestamp: new Date().toISOString() };
 }
 
@@ -637,7 +840,7 @@ function exportResults() {
     if (!state.lastResults) return;
     const r = state.lastResults;
     const lines = [];
-    lines.push(`Compare Game — Tournament Results`);
+    lines.push(`Compare Game \u2014 Tournament Results`);
     lines.push(`Date: ${r.timestamp}`);
     lines.push(`GIFs: ${state.selected.map(s => s.filename).join(', ')}`);
     lines.push(`OTF radius: ${state.rO}`);
