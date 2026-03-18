@@ -20,6 +20,24 @@ from tournament import Tournament
 
 app = Flask(__name__)
 
+# Basic auth — loaded from COMPARE_USERS env var
+# Format: "user1:pass1,user2:pass2" or empty to disable
+_auth_users = {}
+for pair in os.environ.get('COMPARE_USERS', '').split(','):
+    pair = pair.strip()
+    if ':' in pair:
+        u, p = pair.split(':', 1)
+        _auth_users[u] = p
+
+
+@app.before_request
+def check_auth():
+    if not _auth_users:
+        return  # no auth configured
+    auth = request.authorization
+    if not auth or _auth_users.get(auth.username) != auth.password:
+        return ('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Compare Game"'})
+
 # In-memory store: exp_id -> experiment data
 experiments = {}
 # Tournament store: session_id -> tournament data
