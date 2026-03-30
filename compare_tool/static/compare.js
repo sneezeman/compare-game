@@ -23,6 +23,27 @@ const state = {
 // Utilities
 // =========================================================================
 
+function formatDirName(dirPath) {
+    // Parse naming convention:
+    // Training tile: YY031A_HT_100nm_T000_0001_rec_
+    // Finetuning:    YY031A_HT_100nm_T001_0001_rec__from_YY031A_HT_100nm_T000_0001_rec__140
+    const name = dirPath.split('/').pop() || dirPath;
+
+    const ftMatch = name.match(/(.+?)_(T\d+)_(\d+)_rec__from_(.+?)_(T\d+)_(\d+)_rec__(\d+)/);
+    if (ftMatch) {
+        const [, sample, tomo, , , srcTomo, , srcEpoch] = ftMatch;
+        return `<span class="dir-tomo">${tomo}</span> <span class="dir-arrow">\u2190</span> <span class="dir-src">${srcTomo}@${srcEpoch}</span> <span class="dir-sample">${sample}</span>`;
+    }
+
+    const trainMatch = name.match(/(.+?)_(T\d+)_(\d+)_rec_?$/);
+    if (trainMatch) {
+        const [, sample, tomo] = trainMatch;
+        return `<span class="dir-tomo">${tomo}</span> <span class="dir-type">training</span> <span class="dir-sample">${sample}</span>`;
+    }
+
+    return dirPath;
+}
+
 function metricColor(t) {
     // t in [0, 1]: 0 = worst (red), 1 = best (green)
     t = Math.max(0, Math.min(1, t));
@@ -102,7 +123,8 @@ async function loadPreloaded() {
                     <input type="checkbox" class="dir-checkbox" data-dir="${dirId}"
                         onchange="toggleDirCheckboxes('${dirId}', this.checked)">
                 </label>
-                <span class="dir-name" onclick="toggleDir('${dirId}')">${dirPath}</span>
+                <span class="dir-name" onclick="toggleDir('${dirId}')">${formatDirName(dirPath)}</span>
+                <span class="dir-raw-path">${dirPath}</span>
             `;
             dirDiv.appendChild(header);
 
@@ -312,73 +334,82 @@ async function showEpochConfig() {
 
     const form = document.getElementById('epoch-config-form');
 
-    // Use first selected experiment's config as defaults
-    const firstExpConfig = data.experiments[state.selected[0]?.expId];
-    const config = firstExpConfig?.epoch_config || {};
-    const source = config.source || 'default';
+    // Build per-GIF config rows
+    let html = '';
+    const anyDetected = state.selected.some(s => {
+        const c = data.experiments[s.expId]?.epoch_config || {};
+        return c.source === 'cli' || c.source === 'filename';
+    });
+    if (anyDetected) {
+        html += '<p class="center-row" style="color: #4ecdc4; margin-bottom: 12px;">Pre-filled from detected values</p>';
+    }
 
-    let sourceText = '';
-    if (source === 'cli') sourceText = 'Pre-filled from command line flags';
-    else if (source === 'filename') sourceText = 'Detected from filename';
-
-    form.innerHTML = `
-        ${sourceText ? `<p class="center-row" style="color: #4ecdc4; margin-bottom: 12px;">${sourceText}</p>` : ''}
-        <div class="epoch-config-fields">
-            <label>First epoch:
-                <input type="number" id="epoch-start" value="${config.start ?? ''}" placeholder="e.g. 100">
-            </label>
-            <label>Last epoch:
-                <input type="number" id="epoch-end" value="${config.end ?? ''}" placeholder="optional">
-            </label>
-            <label>Step:
-                <input type="number" id="epoch-step" value="${config.step ?? ''}" placeholder="default: 1" min="1">
-            </label>
-            <label class="checkbox-label" style="gap: 8px;">
-                <input type="checkbox" id="epoch-raw-first" ${config.raw_first ? 'checked' : ''}>
-                First frame is RAW (no denoising)
-            </label>
-        </div>
-        <div id="epoch-preview"></div>
-    `;
+    state.selected.forEach((s, i) => {
+        const expConfig = data.experiments[s.expId]?.epoch_config || {};
+        const gifName = s.filename.split('/').pop();
+        html += `
+            <div class="epoch-config-card">
+                <div class="epoch-config-gif-name">${gifName}</div>
+                <div class="epoch-config-row">
+                    <label>Start: <input type="number" class="ec-start" data-idx="${i}" value="${expConfig.start ?? ''}" placeholder="e.g. 100"></label>
+                    <label>End: <input type="number" class="ec-end" data-idx="${i}" value="${expConfig.end ?? ''}" placeholder="optional"></label>
+                    <label>Step: <input type="number" class="ec-step" data-idx="${i}" value="${expConfig.step ?? ''}" placeholder="1" min="1"></label>
+                    <label class="checkbox-label" style="gap: 6px;">
+                        <input type="checkbox" class="ec-raw" data-idx="${i}" ${expConfig.raw_first ? 'checked' : ''}>
+                        RAW
+                    </label>
+                </div>
+                <div class="preview-row ec-preview" data-idx="${i}"></div>
+            </div>
+        `;
+    });
+    html += '<div id="epoch-preview"></div>';
+    form.innerHTML = html;
 
     const updatePreview = () => {
-        const start = document.getElementById('epoch-start').value ? parseInt(document.getElementById('epoch-start').value) : null;
-        const end = document.getElementById('epoch-end').value ? parseInt(document.getElementById('epoch-end').value) : null;
-        const step = document.getElementById('epoch-step').value ? parseInt(document.getElementById('epoch-step').value) : null;
-        const rawFirst = document.getElementById('epoch-raw-first').checked;
-
-        const preview = document.getElementById('epoch-preview');
-        let html = '<h4 style="margin-top: 16px; color: #aaa;">Label preview</h4>';
-        for (const s of state.selected) {
+        state.selected.forEach((s, i) => {
+            const start = getVal(`.ec-start[data-idx="${i}"]`);
+            const end = getVal(`.ec-end[data-idx="${i}"]`);
+            const step = getVal(`.ec-step[data-idx="${i}"]`);
+            const rawFirst = document.querySelector(`.ec-raw[data-idx="${i}"]`).checked;
             const labels = generateLabels(s.numEpochs, start, end, step, rawFirst);
             const display = labels.length > 10
                 ? labels.slice(0, 4).join(', ') + ', \u2026, ' + labels.slice(-2).join(', ')
                 : labels.join(', ');
-            html += `<div class="preview-row"><span class="filename">${s.filename.split('/').pop()}</span>: ${display}</div>`;
-        }
-        preview.innerHTML = html;
+            document.querySelector(`.ec-preview[data-idx="${i}"]`).textContent = display;
+        });
     };
 
-    ['epoch-start', 'epoch-end', 'epoch-step'].forEach(id => {
-        document.getElementById(id).addEventListener('input', updatePreview);
-    });
-    document.getElementById('epoch-raw-first').addEventListener('change', updatePreview);
+    function getVal(selector) {
+        const el = document.querySelector(selector);
+        return el && el.value ? parseInt(el.value) : null;
+    }
 
+    form.addEventListener('input', updatePreview);
+    form.addEventListener('change', updatePreview);
     updatePreview();
 }
 
 async function submitEpochConfig() {
-    const start = document.getElementById('epoch-start').value ? parseInt(document.getElementById('epoch-start').value) : null;
-    const end = document.getElementById('epoch-end').value ? parseInt(document.getElementById('epoch-end').value) : null;
-    const step = document.getElementById('epoch-step').value ? parseInt(document.getElementById('epoch-step').value) : null;
-    const rawFirst = document.getElementById('epoch-raw-first').checked;
-
-    if (start !== null) {
-        const config = {};
-        for (const s of state.selected) {
+    const config = {};
+    let anyConfig = false;
+    state.selected.forEach((s, i) => {
+        const start = getVal(`.ec-start[data-idx="${i}"]`);
+        const end = getVal(`.ec-end[data-idx="${i}"]`);
+        const step = getVal(`.ec-step[data-idx="${i}"]`);
+        const rawFirst = document.querySelector(`.ec-raw[data-idx="${i}"]`).checked;
+        if (start !== null) {
             config[s.expId] = { start, end, step, raw_first: rawFirst };
+            anyConfig = true;
         }
+    });
 
+    function getVal(selector) {
+        const el = document.querySelector(selector);
+        return el && el.value ? parseInt(el.value) : null;
+    }
+
+    if (anyConfig) {
         await fetch('/api/epoch-config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

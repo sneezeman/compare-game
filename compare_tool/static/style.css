@@ -488,31 +488,6 @@ h1 {
 }
 
 /* Phase 1.5: Epoch Configuration */
-.epoch-config-fields {
-    max-width: 500px;
-    margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.epoch-config-fields label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: #ccc;
-}
-
-.epoch-config-fields input[type="number"] {
-    width: 120px;
-    padding: 6px 10px;
-    background: #16213e;
-    border: 1px solid #444;
-    border-radius: 6px;
-    color: #eee;
-    font-size: 14px;
-}
-
 .preview-row {
     color: #aaa;
     font-size: 13px;
@@ -574,6 +549,85 @@ h1 {
 
 .dir-contents .upload-item {
     border-radius: 4px;
+}
+
+/* Directory name formatting */
+.dir-tomo {
+    color: #4ecdc4;
+    font-weight: 700;
+    font-size: 1.1em;
+}
+
+.dir-arrow {
+    color: #888;
+    margin: 0 2px;
+}
+
+.dir-src {
+    color: #ff6b6b;
+    font-weight: 600;
+}
+
+.dir-type {
+    color: #888;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.dir-sample {
+    color: #666;
+    font-size: 0.8em;
+    margin-left: 4px;
+}
+
+.dir-raw-path {
+    color: #444;
+    font-size: 0.7em;
+    margin-left: auto;
+    word-break: break-all;
+}
+
+/* Per-GIF epoch config */
+.epoch-config-card {
+    background: #16213e;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.epoch-config-gif-name {
+    font-weight: 600;
+    color: #ccc;
+    font-size: 0.9em;
+    margin-bottom: 6px;
+}
+
+.epoch-config-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.epoch-config-row label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #aaa;
+    font-size: 0.85em;
+}
+
+.epoch-config-row input[type="number"] {
+    width: 80px;
+    padding: 4px 6px;
+    background: #0f1a33;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #eee;
+    font-size: 13px;
 }
 
 /* Completion tracking */
