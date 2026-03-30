@@ -106,6 +106,11 @@ async function loadPreloaded() {
             tree[dirPath].push({ ...exp, viewFile });
         });
 
+        // Sort GIFs within each directory by filename
+        for (const dir in tree) {
+            tree[dir].sort((a, b) => a.viewFile.localeCompare(b.viewFile));
+        }
+
         // Sort directories
         const sortedDirs = Object.keys(tree).sort();
 
