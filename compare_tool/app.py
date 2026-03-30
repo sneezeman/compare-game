@@ -30,12 +30,38 @@ for pair in os.environ.get('COMPARE_USERS', '').split(','):
         _auth_users[u] = p
 
 
+# Rate limiting / auto-ban for failed auth attempts
+_fail_counts = {}  # ip -> (count, first_fail_time)
+_banned_ips = set()
+_BAN_THRESHOLD = 10  # ban after this many failed attempts
+_BAN_WINDOW = 300    # within this many seconds
+
+
 @app.before_request
 def check_auth():
+    ip = request.remote_addr
+
+    # Drop banned IPs immediately
+    if ip in _banned_ips:
+        return ('', 403)
+
     if not _auth_users:
         return  # no auth configured
+
     auth = request.authorization
     if not auth or _auth_users.get(auth.username) != auth.password:
+        # Track failures
+        import time
+        now = time.time()
+        count, first = _fail_counts.get(ip, (0, now))
+        if now - first > _BAN_WINDOW:
+            count, first = 0, now
+        count += 1
+        _fail_counts[ip] = (count, first)
+        if count >= _BAN_THRESHOLD:
+            _banned_ips.add(ip)
+            print(f'  Banned {ip} after {count} failed auth attempts')
+            return ('', 403)
         return ('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Compare Game"'})
 
 # In-memory store: exp_id -> experiment data
