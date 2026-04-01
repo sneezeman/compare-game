@@ -27,7 +27,7 @@ from tournament import Tournament
 app = Flask(__name__)
 
 # Thread safety lock for shared mutable state
-_state_lock = threading.Lock()
+_state_lock = threading.RLock()  # reentrant — cleanup is called from locked contexts
 
 # User config: {username: {password, dirs}} loaded from JSON or env var
 _user_config = {}
@@ -395,9 +395,12 @@ def get_metrics(exp_id, epoch):
 
 @app.route('/api/epoch-config')
 def get_epoch_config():
-    """Return epoch config for all experiments."""
+    """Return epoch config for experiments accessible to current user."""
+    username = getattr(g, 'username', None)
     result = {}
     for exp_id, exp in experiments.items():
+        if username and not _user_can_access(username, exp['filename']):
+            continue
         result[exp_id] = {
             'filename': exp['filename'],
             'num_epochs': exp['num_epochs'],
@@ -409,11 +412,14 @@ def get_epoch_config():
 
 @app.route('/api/epoch-config', methods=['POST'])
 def set_epoch_config():
-    """Update epoch config for experiments."""
+    """Update epoch config for experiments (access-checked)."""
+    username = getattr(g, 'username', None)
     data = request.get_json(force=True)
     for exp_id, config in data.get('experiments', {}).items():
         exp = experiments.get(exp_id)
         if not exp:
+            continue
+        if username and not _user_can_access(username, exp['filename']):
             continue
         config['source'] = 'user'
         exp['epoch_config'] = config
@@ -582,26 +588,29 @@ def tournament_choice(session_id):
 
     with _state_lock:
         t.choose(winner)
-    pair = t.current_pair()
-    progress = t.progress()
+        pair = t.current_pair()
+        progress = t.progress()
+        done = t.is_done()
+        results = list(t.results) if t.results else None
+        top_k = list(t.get_top_k()) if t.get_top_k() else None
+        ci = t.get_confidence_intervals()
+        history = t.get_history()
 
     result = {
         'pair': _pair_info(candidates, pair),
         'progress': {'current': progress[0], 'total': progress[1]},
-        'done': t.is_done(),
+        'done': done,
     }
 
     if tie_explanation:
         result['tie_explanation'] = tie_explanation
 
-    if t.is_done():
-        ranking = [candidates[i] for i in t.results]
-        top3 = [candidates[i] for i in t.get_top_k()]
+    if done and results:
+        ranking = [candidates[i] for i in results]
+        top3 = [candidates[i] for i in (top_k or [])]
 
-        # Confidence intervals from Bradley-Terry model
-        ci = t.get_confidence_intervals()
         confidence = []
-        for item_idx in t.results:
+        for item_idx in results:
             if item_idx in ci:
                 confidence.append(ci[item_idx])
             else:
@@ -646,12 +655,13 @@ def tournament_undo(session_id):
     candidates = tdata['candidates']
     with _state_lock:
         pair = t.undo()
-    progress = t.progress()
+        progress = t.progress()
+        done = t.is_done()
 
     return jsonify(
         pair=_pair_info(candidates, pair),
         progress={'current': progress[0], 'total': progress[1]},
-        done=t.is_done(),
+        done=done,
         undone=pair is not None,
     )
 
@@ -874,7 +884,8 @@ def _ensure_loaded(exp_id):
     if not exp:
         return None
     if 'frames' in exp:
-        _access_times[exp_id] = time.time()
+        with _state_lock:
+            _access_times[exp_id] = time.time()
         return exp  # already loaded
 
     with _state_lock:
