@@ -70,6 +70,9 @@ experiments = {}
 tournaments = {}
 # Metrics cache: (exp_id, epoch, roi, r_o) -> metrics list
 _metrics_cache = {}
+# LRU tracking: exp_id -> last_access_time (for frame eviction)
+_access_times = {}
+_MAX_LOADED = 5  # max experiments with frames in memory at once
 # Past results: [{filename, date, gifs, roi, top3, path}, ...]
 past_results = []
 # Filenames that have completed comparisons: {gif_filename: user_name}
@@ -701,13 +704,39 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
 # Data directory loading
 # ---------------------------------------------------------------------------
 
+def _evict_lru():
+    """Evict least recently used experiment frames to free memory."""
+    loaded = [eid for eid, exp in experiments.items() if 'frames' in exp]
+    if len(loaded) <= _MAX_LOADED:
+        return
+
+    # Sort by access time, evict oldest
+    loaded.sort(key=lambda eid: _access_times.get(eid, 0))
+    while len(loaded) > _MAX_LOADED:
+        evict_id = loaded.pop(0)
+        exp = experiments[evict_id]
+        del exp['frames']
+        del exp['variability']
+        # Clear metrics cache for this experiment
+        to_del = [k for k in _metrics_cache if k[0] == evict_id]
+        for k in to_del:
+            del _metrics_cache[k]
+        print(f'  Evicted {exp["filename"]} to free memory')
+
+
 def _ensure_loaded(exp_id):
     """Lazy-load frames for an experiment if not yet loaded."""
+    import time
     exp = experiments.get(exp_id)
     if not exp:
         return None
     if 'frames' in exp:
+        _access_times[exp_id] = time.time()
         return exp  # already loaded
+
+    # Evict old experiments before loading new one
+    _evict_lru()
+
     # Load from path
     print(f'  Loading {exp["filename"]}...')
     frames = extract_frames(exp['gif_path'])
@@ -719,6 +748,7 @@ def _ensure_loaded(exp_id):
     exp['num_epochs'] = len(frames)
     exp['height'] = frames[0].shape[0]
     exp['width'] = frames[0].shape[1]
+    _access_times[exp_id] = time.time()
     # Regenerate labels if frame count changed
     if len(exp.get('epoch_labels', [])) != len(frames):
         ec = exp.get('epoch_config', {})
