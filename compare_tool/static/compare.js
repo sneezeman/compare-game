@@ -458,6 +458,11 @@ function initROISelection() {
     document.getElementById('start-tournament-btn').disabled = true;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Clean up old resize listener
+    if (state._resizeHandler) {
+        window.removeEventListener('resize', state._resizeHandler);
+    }
+
     // Load ROI suggestions
     loadROISuggestions(current.expId);
 
@@ -499,6 +504,7 @@ function initROISelection() {
     };
     loader.src = `/api/first_frame/${current.expId}`;
 
+    state._resizeHandler = syncCanvasSize;
     window.addEventListener('resize', syncCanvasSize);
 
     const toggle = document.getElementById('heatmap-toggle');

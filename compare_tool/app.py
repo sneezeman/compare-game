@@ -86,12 +86,13 @@ def check_auth():
         return
 
     # Drop banned IPs (expire after 1 hour)
-    ban_time = _banned_ips.get(ip)
-    if ban_time:
-        if time.time() - ban_time < 3600:
-            return ('', 403)
-        else:
-            del _banned_ips[ip]  # ban expired
+    with _state_lock:
+        ban_time = _banned_ips.get(ip)
+        if ban_time:
+            if time.time() - ban_time < 3600:
+                return ('', 403)
+            else:
+                del _banned_ips[ip]  # ban expired
 
     if not _user_config:
         return  # no auth configured
@@ -307,11 +308,19 @@ def list_past_results():
 
 @app.route('/api/past-results/<filename>')
 def get_past_result(filename):
-    """Download a past result TSV file."""
+    """Download a past result TSV file (access-checked)."""
     safe_name = os.path.basename(filename)
     path = os.path.join(results_dir, safe_name)
     if not os.path.isfile(path):
         return jsonify(error='Result not found'), 404
+    # Check if user can access any GIF in this result
+    username = getattr(g, 'username', None)
+    if username:
+        matching = [r for r in past_results if r['filename'] == safe_name]
+        if matching:
+            gifs = matching[0].get('gifs', [])
+            if not any(_user_can_access(username, gif) for gif in gifs):
+                return jsonify(error='Access denied'), 403
     return send_file(path, mimetype='text/tab-separated-values',
                      as_attachment=True, download_name=safe_name)
 
@@ -686,12 +695,14 @@ def tournament_finish(session_id):
 
     t = tdata['tournament']
     candidates = tdata['candidates']
-    t.force_finish()
+    with _state_lock:
+        t.force_finish()
+        results = list(t.results) if t.results else []
+        top_k = list(t.get_top_k()) if t.get_top_k() else []
+        ci = t.get_confidence_intervals()
 
-    ranking = [candidates[i] for i in t.results]
-    top3 = [candidates[i] for i in t.get_top_k()]
-
-    ci = t.get_confidence_intervals()
+    ranking = [candidates[i] for i in results]
+    top3 = [candidates[i] for i in top_k]
     confidence = []
     for item_idx in t.results:
         confidence.append(ci.get(item_idx))
@@ -807,6 +818,8 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
             lines.append('')
 
         # TSV table
+        if not all_metrics:
+            return save_path  # nothing to save
         metric_names = [n for n, _, _ in all_metrics[0]]
         lines.append('\t'.join(['Rank', 'Candidate'] + metric_names))
         for i, (c, metrics) in enumerate(zip(ranking, all_metrics)):
@@ -1067,6 +1080,7 @@ if __name__ == '__main__':
     if args.raw_first:
         cli_epoch_config['raw_first'] = True
 
+    global results_dir
     results_dir = args.results_dir or os.path.join(args.data_dir, 'results')
 
     print(f'Scanning GIFs from {args.data_dir}...')
