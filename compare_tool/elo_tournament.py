@@ -161,7 +161,7 @@ class EloTournament:
                 other_internal = self.items.index(other_idx)
                 other_s = strengths[other_internal]
                 if other_s < lower:
-                    rank_upper = min(rank_upper, other_rank)
+                    rank_upper = min(rank_upper, other_rank + 1)
                 if other_s > upper:
                     rank_lower = max(rank_lower, other_rank + 2)
 

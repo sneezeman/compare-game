@@ -1,0 +1,34 @@
+# Compare Game Project Memory
+
+## Project Location
+`~/Projects_work/Compare_game`
+
+## Project Structure
+- `compare_tool/` — Flask web app for pairwise epoch comparison
+  - `app.py` — Flask server with REST API
+  - `metrics.py` — 17 image quality metrics
+  - `tournament.py` — Partial merge-sort tournament with undo
+  - `gif_loader.py` — GIF frame extraction, variability heatmap
+  - `templates/index.html` — Single-page app (4 phases)
+  - `static/compare.js` — Frontend logic, keyboard handling
+  - `static/style.css` — Dark theme styling
+  - `venv/` — Python virtual environment (in .gitignore)
+
+## How to Run
+```bash
+cd ~/Projects_work/Compare_game/compare_tool
+source venv/bin/activate
+python app.py --data-dir ~/Projects_work/Compare_game --port 5001
+```
+
+## Data
+- GIFs are grayscale, ~11 frames (epochs), up to 2000x2000px
+- 6 GIFs in 2 experiment directories (3 views each)
+
+## Key Design Decisions
+- Tournament uses merge-sort, ~18 comparisons for 11 items
+- 17 metrics: Brenner, Tenengrad, Laplacian Var, SML, Vollath F4/F5, Norm.Var, Hist.Entropy, Kurtosis, Local Std, DCTS, NDCTBE, HF Energy, Spec.Struct., Spec.Slope, NHWTSE, Wavelet E.R.
+- DCTS is paper's recommended metric; NHWTSE highlighted in UI
+- Tie-breaking uses majority vote across all metrics
+- Double-space to select winner, Enter for tie, Ctrl+Z for undo
+- Results show full_label (including directory path) for each candidate

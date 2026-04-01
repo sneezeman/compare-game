@@ -499,7 +499,7 @@ function initROISelection() {
     };
     loader.src = `/api/first_frame/${current.expId}`;
 
-    window.onresize = syncCanvasSize;
+    window.addEventListener('resize', syncCanvasSize);
 
     const toggle = document.getElementById('heatmap-toggle');
     toggle.checked = true;
@@ -1010,7 +1010,7 @@ function exportResults() {
     a.href = url;
     a.download = `compare_results_${r.timestamp.slice(0, 10)}.tsv`;
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function rerunWithNewROI() {

@@ -5,14 +5,17 @@ Flask server for the Compare Game — epoch comparison tool.
 import argparse
 import hmac
 import io
+import json
 import os
 import re
 import threading
+import time
 import uuid
 from datetime import datetime
 
+import glob as glob_mod
+
 import numpy as np
-import json
 from flask import Flask, g, jsonify, render_template, request, send_file
 from PIL import Image
 
@@ -78,6 +81,10 @@ _BAN_WINDOW = 300    # within this many seconds
 def check_auth():
     ip = request.remote_addr
 
+    # Health check — exempt from auth
+    if request.path == '/health':
+        return
+
     # Drop banned IPs immediately
     if ip in _banned_ips:
         return ('', 403)
@@ -93,7 +100,6 @@ def check_auth():
 
     if not user_cfg or not hmac.compare_digest(user_cfg['password'], auth.password):
         # Track failures
-        import time
         now = time.time()
         with _state_lock:
             count, first = _fail_counts.get(ip, (0, now))
@@ -121,12 +127,19 @@ def _check_exp_access(exp_id):
 
 
 def _cleanup_old_tournaments():
-    """Remove tournaments older than 24 hours."""
+    """Remove tournaments older than 24 hours and stale rate-limit entries."""
+    now = time.time()
     cutoff = datetime.now().timestamp() - 86400
-    to_remove = [sid for sid, td in tournaments.items()
-                 if td.get('created_at', 0) < cutoff]
-    for sid in to_remove:
-        del tournaments[sid]
+    with _state_lock:
+        to_remove = [sid for sid, td in tournaments.items()
+                     if td.get('created_at', 0) < cutoff]
+        for sid in to_remove:
+            del tournaments[sid]
+        # Clean up stale fail counts
+        stale = [ip for ip, (count, first) in _fail_counts.items()
+                 if now - first > _BAN_WINDOW * 2]
+        for ip in stale:
+            del _fail_counts[ip]
 
 
 # In-memory store: exp_id -> experiment data
@@ -137,7 +150,8 @@ tournaments = {}
 _metrics_cache = {}
 # LRU tracking: exp_id -> last_access_time (for frame eviction)
 _access_times = {}
-_MAX_LOADED = 5  # max experiments with frames in memory at once
+_MAX_LOADED = 3  # max experiments with frames in memory at once
+_MAX_METRICS_CACHE = 5000  # max entries in metrics cache
 # Past results: [{filename, date, gifs, roi, top3, path}, ...]
 past_results = []
 # Filenames that have completed comparisons: {gif_filename: user_name}
@@ -224,6 +238,11 @@ def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
     img = _apply_roi(img, roi_str)
     results = compute_all(img, r_o=r_o)
     with _state_lock:
+        if len(_metrics_cache) >= _MAX_METRICS_CACHE:
+            # Evict oldest half
+            keys = list(_metrics_cache.keys())
+            for k in keys[:len(keys) // 2]:
+                del _metrics_cache[k]
         _metrics_cache[key] = results
     return results
 
@@ -231,6 +250,12 @@ def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@app.route('/health')
+def health():
+    return jsonify(status='ok', experiments=len(experiments),
+                   loaded=sum(1 for e in experiments.values() if 'frames' in e))
+
 
 @app.route('/')
 def index():
@@ -276,7 +301,6 @@ def list_past_results():
 @app.route('/api/past-results/<filename>')
 def get_past_result(filename):
     """Download a past result TSV file."""
-    import os.path
     safe_name = os.path.basename(filename)
     path = os.path.join(results_dir, safe_name)
     if not os.path.isfile(path):
@@ -846,7 +870,6 @@ def _evict_lru():
 
 def _ensure_loaded(exp_id):
     """Lazy-load frames for an experiment if not yet loaded."""
-    import time
     exp = experiments.get(exp_id)
     if not exp:
         return None
@@ -895,7 +918,7 @@ def scan_past_results():
     if not os.path.isdir(results_dir):
         return
 
-    import glob as glob_mod
+
     for tsv_path in sorted(glob_mod.glob(os.path.join(results_dir, '*.tsv')), reverse=True):
         try:
             with open(tsv_path) as f:
@@ -933,7 +956,7 @@ def scan_past_results():
 
 def load_data_dir(data_dir, cli_config=None):
     """Scan a data directory for GIFs (lazy — only metadata, no pixel loading)."""
-    import glob as glob_mod
+
 
     if cli_config is None:
         cli_config = {}
