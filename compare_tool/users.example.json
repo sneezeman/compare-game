@@ -1,0 +1,10 @@
+{
+  "artem": {
+    "password": "changeme",
+    "dirs": ["*"]
+  },
+  "collaborator": {
+    "password": "changeme",
+    "dirs": ["finetune"]
+  }
+}

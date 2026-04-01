@@ -10,7 +10,8 @@ import uuid
 from datetime import datetime
 
 import numpy as np
-from flask import Flask, jsonify, render_template, request, send_file
+import json
+from flask import Flask, g, jsonify, render_template, request, send_file
 from PIL import Image
 
 from gif_loader import (compute_variability_map, extract_frames,
@@ -20,14 +21,45 @@ from tournament import Tournament
 
 app = Flask(__name__)
 
-# Basic auth — loaded from COMPARE_USERS env var
-# Format: "user1:pass1,user2:pass2" or empty to disable
-_auth_users = {}
-for pair in os.environ.get('COMPARE_USERS', '').split(','):
-    pair = pair.strip()
-    if ':' in pair:
-        u, p = pair.split(':', 1)
-        _auth_users[u] = p
+# User config: {username: {password, dirs}} loaded from JSON or env var
+_user_config = {}
+
+
+def load_users_config(config_path=None):
+    """Load user config from JSON file or COMPARE_USERS env var."""
+    global _user_config
+    _user_config = {}
+
+    # Check env var for config path if not provided
+    if not config_path:
+        config_path = os.environ.get('COMPARE_USERS_CONFIG')
+
+    if config_path and os.path.isfile(config_path):
+        with open(config_path) as f:
+            data = json.load(f)
+        for username, cfg in data.items():
+            _user_config[username] = {
+                'password': cfg['password'],
+                'dirs': cfg.get('dirs', ['*']),
+            }
+        print(f'  Loaded {len(_user_config)} user(s) from {config_path}')
+        return
+
+    # Fallback: COMPARE_USERS env var (all users get full access)
+    for pair in os.environ.get('COMPARE_USERS', '').split(','):
+        pair = pair.strip()
+        if ':' in pair:
+            u, p = pair.split(':', 1)
+            _user_config[u] = {'password': p, 'dirs': ['*']}
+
+
+def _user_can_access(username, filename):
+    """Check if a user can access an experiment by its filename."""
+    cfg = _user_config.get(username, {})
+    dirs = cfg.get('dirs', [])
+    if '*' in dirs:
+        return True
+    return any(filename.startswith(d) for d in dirs)
 
 
 # Rate limiting / auto-ban for failed auth attempts
@@ -45,11 +77,12 @@ def check_auth():
     if ip in _banned_ips:
         return ('', 403)
 
-    if not _auth_users:
+    if not _user_config:
         return  # no auth configured
 
     auth = request.authorization
-    if not auth or _auth_users.get(auth.username) != auth.password:
+    user_cfg = _user_config.get(auth.username) if auth else None
+    if not user_cfg or user_cfg['password'] != auth.password:
         # Track failures
         import time
         now = time.time()
@@ -63,6 +96,8 @@ def check_auth():
             print(f'  Banned {ip} after {count} failed auth attempts')
             return ('', 403)
         return ('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Compare Game"'})
+
+    g.username = auth.username
 
 # In-memory store: exp_id -> experiment data
 experiments = {}
@@ -172,9 +207,12 @@ def index():
 
 @app.route('/api/experiments')
 def list_experiments():
-    """List all loaded experiments with completion status."""
+    """List all loaded experiments with completion status, filtered by user access."""
+    username = getattr(g, 'username', None)
     result = []
     for exp_id, exp in experiments.items():
+        if username and not _user_can_access(username, exp['filename']):
+            continue
         result.append({
             'exp_id': exp_id,
             'filename': exp['filename'],
@@ -881,7 +919,11 @@ if __name__ == '__main__':
                         help='Path to SSL certificate file for HTTPS')
     parser.add_argument('--ssl-key', type=str, default=None,
                         help='Path to SSL private key file for HTTPS')
+    parser.add_argument('--users-config', type=str, default=None,
+                        help='Path to users.json config file')
     args = parser.parse_args()
+
+    load_users_config(args.users_config)
 
     cli_epoch_config = {}
     if args.epoch_start is not None:
