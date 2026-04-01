@@ -72,7 +72,7 @@ def _user_can_access(username, filename):
 
 # Rate limiting / auto-ban for failed auth attempts
 _fail_counts = {}  # ip -> (count, first_fail_time)
-_banned_ips = set()
+_banned_ips = {}   # ip -> ban_timestamp
 _BAN_THRESHOLD = 10  # ban after this many failed attempts
 _BAN_WINDOW = 300    # within this many seconds
 
@@ -85,9 +85,13 @@ def check_auth():
     if request.path == '/health':
         return
 
-    # Drop banned IPs immediately
-    if ip in _banned_ips:
-        return ('', 403)
+    # Drop banned IPs (expire after 1 hour)
+    ban_time = _banned_ips.get(ip)
+    if ban_time:
+        if time.time() - ban_time < 3600:
+            return ('', 403)
+        else:
+            del _banned_ips[ip]  # ban expired
 
     if not _user_config:
         return  # no auth configured
@@ -98,7 +102,7 @@ def check_auth():
     else:
         user_cfg = _user_config[auth.username]
 
-    if not user_cfg or not hmac.compare_digest(user_cfg['password'], auth.password):
+    if not user_cfg or not auth.password or not hmac.compare_digest(user_cfg['password'], auth.password):
         # Track failures
         now = time.time()
         with _state_lock:
@@ -108,7 +112,7 @@ def check_auth():
             count += 1
             _fail_counts[ip] = (count, first)
             if count >= _BAN_THRESHOLD:
-                _banned_ips.add(ip)
+                _banned_ips[ip] = now
                 print(f'  Banned {ip} after {count} failed auth attempts')
                 return ('', 403)
         return ('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Compare Game"'})
@@ -135,11 +139,14 @@ def _cleanup_old_tournaments():
                      if td.get('created_at', 0) < cutoff]
         for sid in to_remove:
             del tournaments[sid]
-        # Clean up stale fail counts
+        # Clean up stale fail counts and expired bans
         stale = [ip for ip, (count, first) in _fail_counts.items()
                  if now - first > _BAN_WINDOW * 2]
         for ip in stale:
             del _fail_counts[ip]
+        expired_bans = [ip for ip, t in _banned_ips.items() if now - t > 3600]
+        for ip in expired_bans:
+            del _banned_ips[ip]
 
 
 # In-memory store: exp_id -> experiment data
