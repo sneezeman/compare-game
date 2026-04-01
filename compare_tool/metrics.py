@@ -405,7 +405,7 @@ METRICS = [
     ("Wavelet E.R.", wavelet_energy_ratio, True),
     # Cryo-ET specific
     ("LoG Response", log_response, True),
-    ("Noise Est.", noise_estimate, True),
+    ("Detail Pres.", noise_estimate, True),
     ("Contrast Con.", contrast_consistency, True),
 ]
 

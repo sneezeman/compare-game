@@ -3,9 +3,11 @@ Flask server for the Compare Game — epoch comparison tool.
 """
 
 import argparse
+import hmac
 import io
 import os
 import re
+import threading
 import uuid
 from datetime import datetime
 
@@ -20,6 +22,9 @@ from metrics import compute_all, compute_metric_zscores
 from tournament import Tournament
 
 app = Flask(__name__)
+
+# Thread safety lock for shared mutable state
+_state_lock = threading.Lock()
 
 # User config: {username: {password, dirs}} loaded from JSON or env var
 _user_config = {}
@@ -81,23 +86,48 @@ def check_auth():
         return  # no auth configured
 
     auth = request.authorization
-    user_cfg = _user_config.get(auth.username) if auth else None
-    if not user_cfg or user_cfg['password'] != auth.password:
+    if not auth or not auth.username or auth.username not in _user_config:
+        user_cfg = None
+    else:
+        user_cfg = _user_config[auth.username]
+
+    if not user_cfg or not hmac.compare_digest(user_cfg['password'], auth.password):
         # Track failures
         import time
         now = time.time()
-        count, first = _fail_counts.get(ip, (0, now))
-        if now - first > _BAN_WINDOW:
-            count, first = 0, now
-        count += 1
-        _fail_counts[ip] = (count, first)
-        if count >= _BAN_THRESHOLD:
-            _banned_ips.add(ip)
-            print(f'  Banned {ip} after {count} failed auth attempts')
-            return ('', 403)
+        with _state_lock:
+            count, first = _fail_counts.get(ip, (0, now))
+            if now - first > _BAN_WINDOW:
+                count, first = 0, now
+            count += 1
+            _fail_counts[ip] = (count, first)
+            if count >= _BAN_THRESHOLD:
+                _banned_ips.add(ip)
+                print(f'  Banned {ip} after {count} failed auth attempts')
+                return ('', 403)
         return ('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Compare Game"'})
 
     g.username = auth.username
+
+def _check_exp_access(exp_id):
+    """Check if current user can access this experiment. Returns (exp, None) or (None, (error_response, code))."""
+    exp = experiments.get(exp_id)
+    if not exp:
+        return None, (jsonify(error='Experiment not found'), 404)
+    username = getattr(g, 'username', None)
+    if username and not _user_can_access(username, exp['filename']):
+        return None, (jsonify(error='Access denied'), 403)
+    return exp, None
+
+
+def _cleanup_old_tournaments():
+    """Remove tournaments older than 24 hours."""
+    cutoff = datetime.now().timestamp() - 86400
+    to_remove = [sid for sid, td in tournaments.items()
+                 if td.get('created_at', 0) < cutoff]
+    for sid in to_remove:
+        del tournaments[sid]
+
 
 # In-memory store: exp_id -> experiment data
 experiments = {}
@@ -182,8 +212,9 @@ def generate_epoch_labels(num_epochs, start=None, end=None, step=None, raw_first
 def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
     """Get metrics with caching."""
     key = (exp_id, epoch, roi_str or '', r_o)
-    if key in _metrics_cache:
-        return _metrics_cache[key]
+    with _state_lock:
+        if key in _metrics_cache:
+            return _metrics_cache[key]
 
     exp = _ensure_loaded(exp_id)
     if not exp or epoch < 0 or epoch >= exp['num_epochs']:
@@ -192,7 +223,8 @@ def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
     img = exp['frames'][epoch]
     img = _apply_roi(img, roi_str)
     results = compute_all(img, r_o=r_o)
-    _metrics_cache[key] = results
+    with _state_lock:
+        _metrics_cache[key] = results
     return results
 
 
@@ -227,8 +259,18 @@ def list_experiments():
 
 @app.route('/api/past-results')
 def list_past_results():
-    """List all past tournament results."""
-    return jsonify(results=past_results)
+    """List all past tournament results, filtered by user access."""
+    username = getattr(g, 'username', None)
+    if not username:
+        return jsonify(results=past_results)
+
+    filtered = []
+    for r in past_results:
+        # Include result if any of its GIFs are accessible to the user
+        gifs = r.get('gifs', [])
+        if not gifs or any(_user_can_access(username, gif) for gif in gifs):
+            filtered.append(r)
+    return jsonify(results=filtered)
 
 
 @app.route('/api/past-results/<filename>')
@@ -246,6 +288,9 @@ def get_past_result(filename):
 @app.route('/api/frame/<exp_id>/<int:epoch>')
 def get_frame(exp_id, epoch):
     """Return a frame as PNG. Optional ?roi=x,y,w,h for cropping."""
+    exp, err = _check_exp_access(exp_id)
+    if err:
+        return err
     exp = _ensure_loaded(exp_id)
     if not exp:
         return jsonify(error='Experiment not found'), 404
@@ -261,6 +306,9 @@ def get_frame(exp_id, epoch):
 @app.route('/api/variability/<exp_id>')
 def get_variability(exp_id):
     """Return variability heatmap as RGBA PNG overlay."""
+    exp, err = _check_exp_access(exp_id)
+    if err:
+        return err
     exp = _ensure_loaded(exp_id)
     if not exp:
         return jsonify(error='Experiment not found'), 404
@@ -276,6 +324,9 @@ def get_variability(exp_id):
 @app.route('/api/first_frame/<exp_id>')
 def get_first_frame(exp_id):
     """Return the first frame as PNG (for ROI selection background)."""
+    exp, err = _check_exp_access(exp_id)
+    if err:
+        return err
     exp = _ensure_loaded(exp_id)
     if not exp:
         return jsonify(error='Experiment not found'), 404
@@ -285,6 +336,9 @@ def get_first_frame(exp_id):
 @app.route('/api/roi-suggestions/<exp_id>')
 def get_roi_suggestions(exp_id):
     """Return auto-suggested ROI regions based on variability."""
+    exp, err = _check_exp_access(exp_id)
+    if err:
+        return err
     exp = _ensure_loaded(exp_id)
     if not exp:
         return jsonify(error='Experiment not found'), 404
@@ -296,6 +350,9 @@ def get_roi_suggestions(exp_id):
 @app.route('/api/metrics/<exp_id>/<int:epoch>')
 def get_metrics(exp_id, epoch):
     """Return metric values for a frame (optionally cropped by ROI)."""
+    exp, err = _check_exp_access(exp_id)
+    if err:
+        return err
     exp = _ensure_loaded(exp_id)
     if not exp:
         return jsonify(error='Experiment not found'), 404
@@ -360,9 +417,17 @@ def start_tournament():
     if not exps_config:
         return jsonify(error='No experiments specified'), 400
 
+    # Cleanup old tournaments
+    with _state_lock:
+        _cleanup_old_tournaments()
+
     # Build flat list of candidates: [{exp_id, epoch, label}, ...]
     candidates = []
     for ec in exps_config:
+        # Check access for each experiment
+        exp, err = _check_exp_access(ec['exp_id'])
+        if err:
+            return err
         exp = _ensure_loaded(ec['exp_id'])
         if not exp:
             return jsonify(error=f'Experiment {ec["exp_id"]} not found'), 404
@@ -395,6 +460,8 @@ def start_tournament():
         'roi': roi,
         'r_o': r_o,
         'user_name': user_name,
+        'username': getattr(g, 'username', None),
+        'created_at': datetime.now().timestamp(),
     }
 
     pair = t.current_pair()
@@ -426,6 +493,10 @@ def tournament_choice(session_id):
     tdata = tournaments.get(session_id)
     if not tdata:
         return jsonify(error='No active tournament'), 404
+
+    # Verify tournament ownership
+    if tdata.get('username') is not None and tdata.get('username') != getattr(g, 'username', None):
+        return jsonify(error='Access denied'), 403
 
     t = tdata['tournament']
     candidates = tdata['candidates']
@@ -485,7 +556,8 @@ def tournament_choice(session_id):
     if winner not in ('left', 'right'):
         return jsonify(error='Invalid winner'), 400
 
-    t.choose(winner)
+    with _state_lock:
+        t.choose(winner)
     pair = t.current_pair()
     progress = t.progress()
 
@@ -530,7 +602,7 @@ def tournament_choice(session_id):
             for m in all_metrics
         ]
         if save_path:
-            result['save_path'] = save_path
+            result['save_path'] = os.path.basename(save_path)
 
     return jsonify(**result)
 
@@ -542,9 +614,14 @@ def tournament_undo(session_id):
     if not tdata:
         return jsonify(error='No active tournament'), 404
 
+    # Verify tournament ownership
+    if tdata.get('username') is not None and tdata.get('username') != getattr(g, 'username', None):
+        return jsonify(error='Access denied'), 403
+
     t = tdata['tournament']
     candidates = tdata['candidates']
-    pair = t.undo()
+    with _state_lock:
+        pair = t.undo()
     progress = t.progress()
 
     return jsonify(
@@ -561,6 +638,10 @@ def tournament_finish(session_id):
     tdata = tournaments.get(session_id)
     if not tdata:
         return jsonify(error='No active tournament'), 404
+
+    # Verify tournament ownership
+    if tdata.get('username') is not None and tdata.get('username') != getattr(g, 'username', None):
+        return jsonify(error='Access denied'), 403
 
     t = tdata['tournament']
     candidates = tdata['candidates']
@@ -596,7 +677,7 @@ def tournament_finish(session_id):
         ],
     }
     if save_path:
-        result['save_path'] = save_path
+        result['save_path'] = os.path.basename(save_path)
 
     return jsonify(**result)
 
@@ -743,7 +824,8 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
 # ---------------------------------------------------------------------------
 
 def _evict_lru():
-    """Evict least recently used experiment frames to free memory."""
+    """Evict least recently used experiment frames to free memory.
+    Must be called with _state_lock held."""
     loaded = [eid for eid, exp in experiments.items() if 'frames' in exp]
     if len(loaded) <= _MAX_LOADED:
         return
@@ -772,29 +854,35 @@ def _ensure_loaded(exp_id):
         _access_times[exp_id] = time.time()
         return exp  # already loaded
 
-    # Evict old experiments before loading new one
-    _evict_lru()
+    with _state_lock:
+        # Double-check after acquiring lock
+        if 'frames' in exp:
+            _access_times[exp_id] = time.time()
+            return exp
 
-    # Load from path
-    print(f'  Loading {exp["filename"]}...')
-    frames = extract_frames(exp['gif_path'])
-    if len(frames) < 2:
-        return None
-    variability = compute_variability_map(frames)
-    exp['frames'] = frames
-    exp['variability'] = variability
-    exp['num_epochs'] = len(frames)
-    exp['height'] = frames[0].shape[0]
-    exp['width'] = frames[0].shape[1]
-    _access_times[exp_id] = time.time()
-    # Regenerate labels if frame count changed
-    if len(exp.get('epoch_labels', [])) != len(frames):
-        ec = exp.get('epoch_config', {})
-        exp['epoch_labels'] = generate_epoch_labels(
-            len(frames), ec.get('start'), ec.get('end'),
-            ec.get('step'), ec.get('raw_first', False),
-        )
-    print(f'  Loaded {exp["filename"]} ({len(frames)} epochs, {exp["width"]}x{exp["height"]})')
+        # Evict old experiments before loading new one
+        _evict_lru()
+
+        # Load from path
+        print(f'  Loading {exp["filename"]}...')
+        frames = extract_frames(exp['gif_path'])
+        if len(frames) < 2:
+            return None
+        variability = compute_variability_map(frames)
+        exp['frames'] = frames
+        exp['variability'] = variability
+        exp['num_epochs'] = len(frames)
+        exp['height'] = frames[0].shape[0]
+        exp['width'] = frames[0].shape[1]
+        _access_times[exp_id] = time.time()
+        # Regenerate labels if frame count changed
+        if len(exp.get('epoch_labels', [])) != len(frames):
+            ec = exp.get('epoch_config', {})
+            exp['epoch_labels'] = generate_epoch_labels(
+                len(frames), ec.get('start'), ec.get('end'),
+                ec.get('step'), ec.get('raw_first', False),
+            )
+        print(f'  Loaded {exp["filename"]} ({len(frames)} epochs, {exp["width"]}x{exp["height"]})')
     return exp
 
 
@@ -857,14 +945,17 @@ def load_data_dir(data_dir, cli_config=None):
         # Peek at the GIF to get frame count and dimensions without loading all frames
         try:
             img = Image.open(gif_path)
-            w, h = img.size
-            n_frames = 0
             try:
-                while True:
-                    n_frames += 1
-                    img.seek(img.tell() + 1)
-            except EOFError:
-                pass
+                w, h = img.size
+                n_frames = 0
+                try:
+                    while True:
+                        n_frames += 1
+                        img.seek(img.tell() + 1)
+                except EOFError:
+                    pass
+            finally:
+                img.close()
             if n_frames < 2:
                 continue
         except Exception:

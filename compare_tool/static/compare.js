@@ -1,5 +1,11 @@
 // Compare Game — Frontend Logic
 
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 const state = {
     // Multi-select: [{expId, filename, numEpochs, width, height}, ...]
     selected: [],
@@ -13,6 +19,7 @@ const state = {
     metricsB: null,
     spaceCount: 0,
     spaceTimer: null,
+    submitting: false,
     // Internal
     _roiMouseDown: null,
     _roiMouseMove: null,
@@ -32,16 +39,16 @@ function formatDirName(dirPath) {
     const ftMatch = name.match(/(.+?)_(T\d+)_(\d+)_rec__from_(.+?)_(T\d+)_(\d+)_rec__(\d+)/);
     if (ftMatch) {
         const [, sample, tomo, , , srcTomo, , srcEpoch] = ftMatch;
-        return `<span class="dir-tomo">${tomo}</span> <span class="dir-arrow">\u2190</span> <span class="dir-src">${srcTomo}@${srcEpoch}</span> <span class="dir-sample">${sample}</span>`;
+        return `<span class="dir-tomo">${escapeHtml(tomo)}</span> <span class="dir-arrow">\u2190</span> <span class="dir-src">${escapeHtml(srcTomo)}@${escapeHtml(srcEpoch)}</span> <span class="dir-sample">${escapeHtml(sample)}</span>`;
     }
 
     const trainMatch = name.match(/(.+?)_(T\d+)_(\d+)_rec_?$/);
     if (trainMatch) {
         const [, sample, tomo] = trainMatch;
-        return `<span class="dir-tomo">${tomo}</span> <span class="dir-type">training</span> <span class="dir-sample">${sample}</span>`;
+        return `<span class="dir-tomo">${escapeHtml(tomo)}</span> <span class="dir-type">training</span> <span class="dir-sample">${escapeHtml(sample)}</span>`;
     }
 
-    return dirPath;
+    return escapeHtml(dirPath);
 }
 
 function metricColor(t) {
@@ -123,13 +130,13 @@ async function loadPreloaded() {
             header.className = 'dir-header';
             const dirId = 'dir-' + dirPath.replace(/[^a-zA-Z0-9]/g, '_');
             header.innerHTML = `
-                <span class="dir-toggle" onclick="toggleDir('${dirId}')">&#9660;</span>
+                <span class="dir-toggle" onclick="toggleDir('${escapeHtml(dirId)}')">&#9660;</span>
                 <label class="checkbox-label">
-                    <input type="checkbox" class="dir-checkbox" data-dir="${dirId}"
-                        onchange="toggleDirCheckboxes('${dirId}', this.checked)">
+                    <input type="checkbox" class="dir-checkbox" data-dir="${escapeHtml(dirId)}"
+                        onchange="toggleDirCheckboxes('${escapeHtml(dirId)}', this.checked)">
                 </label>
-                <span class="dir-name" onclick="toggleDir('${dirId}')">${formatDirName(dirPath)}</span>
-                <span class="dir-raw-path">${dirPath}</span>
+                <span class="dir-name" onclick="toggleDir('${escapeHtml(dirId)}')">${formatDirName(dirPath)}</span>
+                <span class="dir-raw-path">${escapeHtml(dirPath)}</span>
             `;
             dirDiv.appendChild(header);
 
@@ -142,19 +149,19 @@ async function loadPreloaded() {
                 const doneClass = exp.has_results ? ' upload-item-done' : '';
                 const doneBy = exp.done_by || '';
                 const doneBadge = exp.has_results
-                    ? `<span class="done-badge">${doneBy ? 'done by ' + doneBy : 'done'}</span>`
+                    ? `<span class="done-badge">${doneBy ? 'done by ' + escapeHtml(doneBy) : 'done'}</span>`
                     : '';
                 const div = document.createElement('div');
                 div.className = 'upload-item' + doneClass;
                 div.innerHTML = `
                     <label class="checkbox-label">
-                        <input type="checkbox" class="exp-checkbox" data-exp-id="${exp.exp_id}"
+                        <input type="checkbox" class="exp-checkbox" data-exp-id="${escapeHtml(exp.exp_id)}"
                                data-num-epochs="${exp.num_epochs}" data-width="${exp.width}"
-                               data-height="${exp.height}" data-filename="${exp.filename}"
-                               data-dir="${dirId}">
+                               data-height="${exp.height}" data-filename="${escapeHtml(exp.filename)}"
+                               data-dir="${escapeHtml(dirId)}">
                     </label>
                     <div class="exp-info-text">
-                        <span class="filename">${exp.viewFile} ${doneBadge}</span>
+                        <span class="filename">${escapeHtml(exp.viewFile)} ${doneBadge}</span>
                         <span class="info">${exp.num_epochs} epochs, ${exp.width}x${exp.height}</span>
                     </div>
                 `;
@@ -227,11 +234,11 @@ async function loadPastResults() {
             const gifsStr = r.gifs.map(g => g.split('/').pop()).join(', ');
             div.innerHTML = `
                 <div class="past-result-info">
-                    <span class="past-result-date">${dateStr}</span>
-                    <span class="past-result-gifs">${gifsStr}</span>
-                    <span class="past-result-top3">${r.top3 || ''}</span>
+                    <span class="past-result-date">${escapeHtml(dateStr)}</span>
+                    <span class="past-result-gifs">${escapeHtml(gifsStr)}</span>
+                    <span class="past-result-top3">${escapeHtml(r.top3 || '')}</span>
                 </div>
-                <a href="/api/past-results/${r.filename}" class="btn btn-secondary" style="padding: 4px 12px; font-size: 0.8em;">Download</a>
+                <a href="/api/past-results/${escapeHtml(r.filename)}" class="btn btn-secondary" style="padding: 4px 12px; font-size: 0.8em;">Download</a>
             `;
             list.appendChild(div);
         });
@@ -352,9 +359,10 @@ async function showEpochConfig() {
     state.selected.forEach((s, i) => {
         const expConfig = data.experiments[s.expId]?.epoch_config || {};
         const gifName = s.filename.split('/').pop();
+        const sourceText = expConfig.source || '';
         html += `
             <div class="epoch-config-card">
-                <div class="epoch-config-gif-name">${gifName}</div>
+                <div class="epoch-config-gif-name">${escapeHtml(gifName)}</div>
                 <div class="epoch-config-row">
                     <label>Start: <input type="number" class="ec-start" data-idx="${i}" value="${expConfig.start ?? ''}" placeholder="e.g. 100"></label>
                     <label>End: <input type="number" class="ec-end" data-idx="${i}" value="${expConfig.end ?? ''}" placeholder="optional"></label>
@@ -610,24 +618,33 @@ function applyROISuggestion(x, y, w, h) {
 }
 
 async function startTournament() {
-    const expsConfig = state.selected.map(s => ({ exp_id: s.expId }));
+    if (state.submitting) return;
+    state.submitting = true;
+    try {
+        const expsConfig = state.selected.map(s => ({ exp_id: s.expId }));
 
-    const resp = await fetch('/api/tournament/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ experiments: expsConfig, roi: state.roi, r_o: state.rO, user_name: state.userName }),
-    });
-    const data = await resp.json();
+        const resp = await fetch('/api/tournament/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ experiments: expsConfig, roi: state.roi, r_o: state.rO, user_name: state.userName }),
+        });
+        if (!resp.ok) { alert('Server error: ' + resp.status); return; }
+        const data = await resp.json();
 
-    if (data.error) { alert(data.error); return; }
+        if (data.error) { alert(data.error); return; }
 
-    state.sessionId = data.session_id;
-    state.currentPair = data.pair;
-    showPhase('tournament');
-    updateProgress(data.progress);
-    buildComparisonImages();
-    initTournamentUI();
-    loadComparison();
+        state.sessionId = data.session_id;
+        state.currentPair = data.pair;
+        showPhase('tournament');
+        updateProgress(data.progress);
+        buildComparisonImages();
+        initTournamentUI();
+        loadComparison();
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    } finally {
+        state.submitting = false;
+    }
 }
 
 // =========================================================================
@@ -677,6 +694,7 @@ function initTournamentUI() {
 
 function handleTournamentKey(e) {
     if (!document.getElementById('phase-tournament').classList.contains('active')) return;
+    if (state.submitting) return;
 
     if (e.key === 'ArrowLeft') {
         e.preventDefault();
@@ -719,8 +737,8 @@ function switchTo(side) {
     applyImgSize();
 
     const label = document.getElementById('epoch-label');
-    const ll = state.currentPair.left.label;
-    const rl = state.currentPair.right.label;
+    const ll = escapeHtml(state.currentPair.left.label);
+    const rl = escapeHtml(state.currentPair.right.label);
     if (side === 'left') {
         label.innerHTML = `<span class="label-left">${ll}</span> <span style="color:#666">vs</span> <span style="color:#666">${rl}</span>`;
     } else {
@@ -757,8 +775,8 @@ async function loadComparison() {
 
 function renderMetricsTable() {
     const table = document.getElementById('metrics-table');
-    const ll = state.currentPair.left.label;
-    const rl = state.currentPair.right.label;
+    const ll = escapeHtml(state.currentPair.left.label);
+    const rl = escapeHtml(state.currentPair.right.label);
     const thead = `<tr><th>Metric</th><th class="label-left">${ll}</th><th class="label-right">${rl}</th></tr>`;
 
     let rows = '';
@@ -783,7 +801,7 @@ function renderMetricsTable() {
         const rowClass = a.name === 'NHWTSE' ? 'metric-highlight' : '';
 
         rows += `<tr class="${rowClass}">
-            <td>${a.name}</td>
+            <td>${escapeHtml(a.name)}</td>
             <td style="${aStyle}">${a.value.toFixed(4)}</td>
             <td style="${bStyle}">${b.value.toFixed(4)}</td>
         </tr>`;
@@ -801,54 +819,81 @@ function highlightMetrics(side) {
 }
 
 async function submitChoice(winner) {
-    const resp = await fetch(`/api/tournament/${state.sessionId}/choice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ winner }),
-    });
-    const data = await resp.json();
-    updateProgress(data.progress);
+    if (state.submitting) return;
+    state.submitting = true;
+    try {
+        const resp = await fetch(`/api/tournament/${state.sessionId}/choice`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ winner }),
+        });
+        if (!resp.ok) { alert('Server error: ' + resp.status); return; }
+        const data = await resp.json();
+        updateProgress(data.progress);
 
-    // Show tie explanation if present
-    const tieEl = document.getElementById('tie-explanation');
-    if (data.tie_explanation) {
-        tieEl.textContent = data.tie_explanation;
-        tieEl.style.display = 'block';
-        setTimeout(() => { tieEl.style.display = 'none'; }, 3000);
-    } else {
-        tieEl.style.display = 'none';
+        // Show tie explanation if present
+        const tieEl = document.getElementById('tie-explanation');
+        if (data.tie_explanation) {
+            tieEl.textContent = data.tie_explanation;
+            tieEl.style.display = 'block';
+            setTimeout(() => { tieEl.style.display = 'none'; }, 3000);
+        } else {
+            tieEl.style.display = 'none';
+        }
+
+        if (data.done) {
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
+            return;
+        }
+
+        state.currentPair = data.pair;
+        state.spaceCount = 0;
+        loadComparison();
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    } finally {
+        state.submitting = false;
     }
-
-    if (data.done) {
-        showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
-        return;
-    }
-
-    state.currentPair = data.pair;
-    state.spaceCount = 0;
-    loadComparison();
 }
 
 async function finishEarly() {
+    if (state.submitting) return;
     if (!state.sessionId) return;
     if (!confirm('Finish the tournament early with current rankings?')) return;
 
-    const resp = await fetch(`/api/tournament/${state.sessionId}/finish`, { method: 'POST' });
-    const data = await resp.json();
-    if (data.done) {
-        showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
+    state.submitting = true;
+    try {
+        const resp = await fetch(`/api/tournament/${state.sessionId}/finish`, { method: 'POST' });
+        if (!resp.ok) { alert('Server error: ' + resp.status); return; }
+        const data = await resp.json();
+        if (data.done) {
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
+        }
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    } finally {
+        state.submitting = false;
     }
 }
 
 async function undoChoice() {
-    const resp = await fetch(`/api/tournament/${state.sessionId}/undo`, { method: 'POST' });
-    const data = await resp.json();
-    if (!data.undone) return;
+    if (state.submitting) return;
+    state.submitting = true;
+    try {
+        const resp = await fetch(`/api/tournament/${state.sessionId}/undo`, { method: 'POST' });
+        if (!resp.ok) { alert('Server error: ' + resp.status); return; }
+        const data = await resp.json();
+        if (!data.undone) return;
 
-    updateProgress(data.progress);
-    state.currentPair = data.pair;
-    state.spaceCount = 0;
-    loadComparison();
+        updateProgress(data.progress);
+        state.currentPair = data.pair;
+        state.spaceCount = 0;
+        loadComparison();
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    } finally {
+        state.submitting = false;
+    }
 }
 
 function updateProgress(progress) {
@@ -873,7 +918,7 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
     for (let i = 0; i < top3.length; i++) {
         const div = document.createElement('div');
         div.className = 'podium-item';
-        div.innerHTML = `<div class="rank">${medals[i]}</div><div class="epoch-num">${top3[i].full_label || top3[i].label}</div>`;
+        div.innerHTML = `<div class="rank">${medals[i]}</div><div class="epoch-num">${escapeHtml(top3[i].full_label || top3[i].label)}</div>`;
         podium.appendChild(div);
     }
 
@@ -894,7 +939,7 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
     let headers = '<tr><th>Rank</th><th>Candidate</th>';
     const numMetrics = allMetrics.length > 0 ? allMetrics[0].length : 0;
     if (numMetrics > 0) {
-        allMetrics[0].forEach(m => { headers += `<th>${m.name}</th>`; });
+        allMetrics[0].forEach(m => { headers += `<th>${escapeHtml(m.name)}</th>`; });
     }
     headers += '</tr>';
 
@@ -912,7 +957,7 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
 
     let rows = '';
     for (let i = 0; i < ranking.length; i++) {
-        rows += `<tr><td>${i + 1}</td><td>${ranking[i].full_label || ranking[i].label}</td>`;
+        rows += `<tr><td>${i + 1}</td><td>${escapeHtml(ranking[i].full_label || ranking[i].label)}</td>`;
         allMetrics[i].forEach((m, mi) => {
             const range = metricMaxs[mi] - metricMins[mi];
             const t = range > 0 ? (m.value - metricMins[mi]) / range : 0.5;

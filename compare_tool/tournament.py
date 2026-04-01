@@ -16,7 +16,7 @@ class Tournament:
         self.history = []
         # sorted sublists that get merged pairwise
         self.sublists = [[x] for x in self.items]
-        self.top_k = min(1, self.n)
+        self.top_k = min(3, self.n)
         # estimate total comparisons
         self.estimated_total = self._estimate_comparisons()
         self.comparison_count = 0
@@ -42,18 +42,19 @@ class Tournament:
         self._advance_to_next_comparison()
 
     def _estimate_comparisons(self):
-        """Estimate comparisons for partial merge sort.
-        With top_k=1, the last merge of two n/2-sized sorted lists
-        needs only top_k comparisons instead of ~n. Earlier rounds
-        are full merges: each round merges pairs fully."""
         n = self.n
         if n <= self.top_k:
             return max(0, n - 1)
+        # Full merge sort minus savings from short-circuiting last merge
+        # Each round does ~n comparisons in the worst case for full merges
+        # Last round: only top_k comparisons needed
         rounds = int(math.ceil(math.log2(max(n, 2))))
-        # Each round except the last does ~n/2 comparisons on average
-        # Last round: only top_k comparisons (short-circuit)
-        comparisons = (rounds - 1) * n // 2 + self.top_k
-        return max(n - 1, comparisons)
+        # Worst case: each non-final round merges all pairs fully
+        full_round_comps = sum(min(n, 2**r) - 1 for r in range(1, rounds))
+        # Actually simplify: n*log2(n) is the standard merge sort estimate
+        # With top_k short-circuit on last merge, save (n - top_k)
+        estimate = int(n * math.log2(max(n, 2))) - (n - self.top_k)
+        return max(n - 1, estimate)
 
     def _prepare_merge_round(self):
         """Pair up sublists for a merge round."""
@@ -244,16 +245,37 @@ class Tournament:
         """Force tournament to finish with current best ordering."""
         if self.results is not None:
             return
-        # Merge remaining sublists as-is (interleave without comparisons)
-        flat = []
+        # Collect all items from all sources: merged so far, in-progress merge,
+        # pending merge queue, completed new sublists, and leftover
+        seen = set()
+        ordered = []
+
+        def add_items(items):
+            for item in items:
+                if item not in seen:
+                    seen.add(item)
+                    ordered.append(item)
+
+        # Current merge progress (partially sorted)
+        add_items(self._merged)
+        add_items(self._left[self._li:])
+        add_items(self._right[self._ri:])
+
+        # Already completed merges this round
+        for sl in self._new_sublists:
+            add_items(sl)
+
+        # Pending merges in queue
+        for left, right in self._merge_queue:
+            add_items(left)
+            add_items(right)
+
+        # Leftover from odd count
+        if self._leftover:
+            add_items(self._leftover)
+
+        # Any remaining from previous round sublists not yet queued
         for sl in self.sublists:
-            flat.extend(sl)
-        # Add any in-progress merge
-        remaining = self._merged + self._left[self._li:] + self._right[self._ri:]
-        if remaining and remaining != flat:
-            flat = remaining
-            for sl in self._new_sublists:
-                flat.extend(sl)
-            if self._leftover:
-                flat.extend(self._leftover)
-        self.results = flat
+            add_items(sl)
+
+        self.results = ordered

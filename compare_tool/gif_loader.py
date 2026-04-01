@@ -19,6 +19,8 @@ def extract_frames(gif_path):
             img.seek(img.tell() + 1)
     except EOFError:
         pass
+    finally:
+        img.close()
     return frames
 
 

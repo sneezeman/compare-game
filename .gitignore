@@ -17,5 +17,8 @@ venv/
 # OS
 .DS_Store
 
+# Credentials / user config
+users.json
+
 # Claude Code
 CLAUDE.md
