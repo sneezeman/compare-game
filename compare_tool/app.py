@@ -495,6 +495,9 @@ def start_tournament():
 
     # Sort candidates by epoch descending — later epochs are likely better,
     # so placing them first helps merge-sort find the winner faster
+    if not candidates:
+        return jsonify(error='No candidates after filtering (all frames may be RAW)'), 400
+
     candidates.sort(key=lambda c: c['epoch'], reverse=True)
 
     session_id = str(uuid.uuid4())[:8]

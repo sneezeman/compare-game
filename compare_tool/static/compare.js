@@ -641,6 +641,13 @@ async function startTournament() {
 
         state.sessionId = data.session_id;
         state.currentPair = data.pair;
+
+        // Handle immediate completion (e.g., 1 candidate after RAW exclusion)
+        if (data.done) {
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
+            return;
+        }
+
         showPhase('tournament');
         updateProgress(data.progress);
         buildComparisonImages();
