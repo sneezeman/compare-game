@@ -1073,6 +1073,8 @@ if __name__ == '__main__':
 
     load_users_config(args.users_config)
 
+    global results_dir
+
     cli_epoch_config = {}
     if args.epoch_start is not None:
         cli_epoch_config['start'] = args.epoch_start
@@ -1083,7 +1085,6 @@ if __name__ == '__main__':
     if args.raw_first:
         cli_epoch_config['raw_first'] = True
 
-    global results_dir
     results_dir = args.results_dir or os.path.join(args.data_dir, 'results')
 
     print(f'Scanning GIFs from {args.data_dir}...')
