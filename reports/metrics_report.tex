@@ -1,0 +1,168 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{hyperref}
+
+\definecolor{toprow}{HTML}{E8F5E9}
+\definecolor{midrow}{HTML}{FFF8E1}
+\definecolor{botrow}{HTML}{FFEBEE}
+
+\title{Image Quality Metrics for X-ray Tomography Epoch Selection\\[4pt]\large Analysis of 52 Human Comparison Tournaments}
+\author{Compare Game Analysis}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Context}
+
+When denoising X-ray tomography reconstructions with iterative deep learning methods, the training must be stopped at an optimal epoch. There is no ground truth to optimize against, so the stopping point is typically chosen by visual inspection.
+
+We built a pairwise comparison tool where users compare epoch pairs side-by-side in a merge-sort tournament and select the better-looking reconstruction. The tool also computes image quality metrics on each candidate. By comparing the human rankings with each metric's ranking, we evaluate which metrics best predict human visual judgment.
+
+There are two experimental modes. \textbf{Training tiles} (13 tournaments): initial training runs with wide epoch ranges and large quality differences. \textbf{Finetuning} (39 tournaments): starting from a pre-trained checkpoint with much smaller differences between candidates.
+
+The tournament uses a merge-sort algorithm with top\_k=3, meaning only the top-3 positions are reliably ordered. All analysis uses \emph{only} the top-3 positions: \textbf{top-3 agreement} (overlap between metric's and human's top-3) and \textbf{top-1 identification rate} (whether the metric's \#1 pick is in the human's top-3).
+
+For reference, chance-level performance for random selection: training tiles ($\sim$37 candidates) have $\sim$8\% top-1 ID rate; finetuning ($\sim$20 candidates) have $\sim$15\% top-1 ID rate. Note that training tile tournaments include 3 views of the same tomograms, so the effective sample size is smaller than the file count suggests.
+
+\section{Results: Training Tiles (13 tournaments)}
+
+\vspace{0.5em}
+\begin{center}
+\small
+\begin{tabular}{clcc}
+\toprule
+\textbf{Rank} & \textbf{Metric} & \textbf{Top-3 Agree.} & \textbf{Top-1 ID Rate} \\
+\midrule
+\rowcolor{botrow} 1 & NDCTBE & 18\% & 15\% \\
+\rowcolor{botrow} 2 & Spec. Slope & 8\% & 15\% \\
+\rowcolor{botrow} 3 & Tenengrad & 28\% & 15\% \\
+\rowcolor{botrow} 4 & Brenner & 15\% & 8\% \\
+\rowcolor{botrow} 5 & DCTS & 18\% & 8\% \\
+\midrule
+\multicolumn{4}{l}{\textit{All other metrics have top-1 ID rate $\leq$ 8\% (chance level).}} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Results: Finetuning (39 tournaments)}
+
+\vspace{0.5em}
+\begin{center}
+\small
+\begin{tabular}{clcc}
+\toprule
+\textbf{Rank} & \textbf{Metric} & \textbf{Top-3 Agree.} & \textbf{Top-1 ID Rate} \\
+\midrule
+\rowcolor{toprow} 1 & Spec. Struct. (inv.) & 47\% & \textbf{59\%} \\
+\rowcolor{toprow} 2 & HF Energy & 46\% & \textbf{54\%} \\
+\rowcolor{toprow} 3 & Wavelet E.R. & 45\% & \textbf{54\%} \\
+\rowcolor{toprow} 4 & Brenner & 39\% & \textbf{51\%} \\
+\rowcolor{toprow} 5 & Laplacian Var & 46\% & \textbf{51\%} \\
+\rowcolor{toprow} 6 & Local Std & 42\% & \textbf{51\%} \\
+\rowcolor{toprow} 7 & Tenengrad & 38\% & \textbf{51\%} \\
+\rowcolor{toprow} 8 & LoG Response & 41\% & \textbf{46\%} \\
+\rowcolor{toprow} 9 & SML & 46\% & \textbf{46\%} \\
+\rowcolor{toprow} 10 & Vollath F4 & 40\% & \textbf{46\%} \\
+\rowcolor{midrow} 11 & Noise Est. & 34\% & 38\% \\
+\rowcolor{midrow} 12 & Contrast Con. & 25\% & 36\% \\
+\rowcolor{midrow} 13 & Hist. Entropy & 28\% & 33\% \\
+\rowcolor{midrow} 14 & NHWTSE & 32\% & 33\% \\
+\rowcolor{midrow} 15 & Norm. Var. & 25\% & 31\% \\
+16 & DCTS & 28\% & 26\% \\
+17 & NDCTBE & 26\% & 23\% \\
+18 & Vollath F5 & 21\% & 23\% \\
+19 & Kurtosis (inv.) & 25\% & 21\% \\
+\rowcolor{botrow} 20 & Spec. Slope & 15\% & 18\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Metric Redundancy}
+
+Clusters of metrics with Pearson $|r| > 0.95$ (carrying the same information):
+\vspace{0.5em}
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{\#} & \textbf{Metrics in cluster} & \textbf{$|r|$} \\
+\midrule
+1 & DCTS, NDCTBE & 0.98 \\
+2 & HF Energy, Spec. Struct. & 0.98 \\
+3 & Laplacian Var, Noise Est., SML, Tenengrad & 0.88--0.98 \\
+4 & LoG Response, Local Std & 1.00 \\
+5 & Norm. Var., Vollath F5 & 0.96 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Key Findings}
+\begin{enumerate}
+\item \textbf{Metrics work dramatically better for finetuning than for training tiles.} Best finetuning metric: 59\% top-1 ID rate (Spec. Struct.). Training tile metrics are at chance level.
+\item \textbf{No single metric is sufficient.} Even for finetuning, the best metric misses the human top-3 53\% of the time. Human visual comparison remains necessary.
+\item \textbf{Spec. Struct. is the most practically useful metric} for finetuning (59\% top-1 ID rate).
+\item \textbf{7 of 20 metrics can be dropped} without losing information (redundant within clusters).
+\end{enumerate}
+
+\appendix
+\section{Metric Descriptions}
+\small
+
+\subsection*{Differential metrics}
+These measure sharpness via spatial derivatives of the image intensity.
+\begin{description}
+\item[Brenner] Sum of squared horizontal differences with spacing 2: $\frac{1}{N}\sum (I(x+2,y) - I(x,y))^2$. Higher values indicate sharper edges. Simple and fast but sensitive to noise.
+\item[Tenengrad] Mean squared Sobel gradient magnitude: $\frac{1}{N}\sum (G_x^2 + G_y^2)$ where $G_x, G_y$ are Sobel-filtered images. More robust than Brenner due to directional averaging.
+\item[Laplacian Var] Variance of the Laplacian-filtered image: $\mathrm{Var}(\nabla^2 I)$. Captures both edges and fine texture. Widely used in autofocus (e.g.\ OpenCV).
+\item[SML (Sum Modified Laplacian)] Sum of absolute second derivatives in x and y separately: $\frac{1}{N}\sum |I_{xx}| + |I_{yy}|$. More robust than standard Laplacian because absolute values prevent cancellation of opposing gradients.
+\end{description}
+
+\subsection*{Correlative metrics}
+These measure sharpness via autocorrelation of neighboring pixels.
+\begin{description}
+\item[Vollath F4] Difference of autocorrelations at lag 1 and lag 2: $\langle I(x) \cdot I(x+1) \rangle - \langle I(x) \cdot I(x+2) \rangle$. Positive for sharp images (rapid decorrelation), near zero for blurry ones.
+\item[Vollath F5] Autocorrelation at lag 1 minus squared mean: $\langle I(x) \cdot I(x+1) \rangle - \mu^2$. More noise-robust variant of F4.
+\end{description}
+
+\subsection*{Statistical metrics}
+These characterize the intensity distribution of the image.
+\begin{description}
+\item[Norm.\ Var.\ (Normalized Variance)] Variance divided by mean: $\sigma^2 / \mu$. Measures relative contrast. Insensitive to brightness scaling.
+\item[Hist.\ Entropy] Shannon entropy of the intensity histogram: $-\sum p_i \log_2 p_i$. Higher entropy means more uniform use of the intensity range.
+\item[Kurtosis] Excess kurtosis of intensity distribution: $\mu_4/\sigma^4 - 3$. Measures tail heaviness. Can be high for both structured content (sparse features) and impulsive noise, making interpretation ambiguous.
+\item[Local Std] Mean of local standard deviations computed in $7 \times 7$ non-overlapping blocks. Directly measures local texture richness. Higher values indicate more preserved fine detail.
+\end{description}
+
+\subsection*{Spectral (DCT-based) metrics}
+These analyze the frequency content of the image via the Discrete Cosine Transform.
+\begin{description}
+\item[DCTS (DCT Shannon Entropy)] Normalized Shannon entropy of the DCT power spectrum within the OTF support radius $r_o$: $-\sum p_i \ln p_i / \ln n$. Recommended by Royer et al.\ 2016 for light-sheet microscopy autofocus. Performed poorly on our X-ray tomography data.
+\item[NDCTBE (Normalized DCT Bayes Entropy)] Bayesian variant of DCTS using a Dirichlet(1/n) prior for smoothing. Highly correlated with DCTS ($r = 0.97$).
+\item[HF Energy] Fraction of DCT energy in the high-frequency band ($r_o/2 < r \leq r_o$) relative to total energy within $r_o$. Higher values indicate more high-frequency content (sharper).
+\item[Spec.\ Struct.\ (Spectral Flatness)] $1 - $ spectral flatness (Wiener entropy). Spectral flatness is the ratio of geometric to arithmetic mean of the power spectrum. Higher values (less flat spectrum) indicate more structured content. \textbf{Note:} in our data this metric works best when \emph{inverted} (lower values preferred), suggesting the relationship reverses for denoised reconstructions.
+\item[Spec.\ Slope] Slope $\beta$ of the radial power spectrum on a log-log scale, fit via linear regression: $P(f) \sim f^{-\beta}$. Natural images have $\beta \approx 2$. Steeper slopes indicate more low-frequency dominance. Performed poorly --- essentially random for our data.
+\end{description}
+
+\subsection*{Wavelet metrics}
+These use the Haar wavelet transform to separate detail from approximation.
+\begin{description}
+\item[NHWTSE (Norm.\ Haar Wavelet Transform Shannon Entropy)] Normalized Shannon entropy of the wavelet detail coefficients (LH, HL, HH subbands). Higher entropy means more uniformly distributed detail energy.
+\item[Wavelet E.R.\ (Wavelet Energy Ratio)] Fraction of total image energy in the detail subbands across 3 decomposition levels. Higher values mean more energy in edges and texture relative to smooth approximation. \textbf{Third best metric for finetuning} (54\% top-1 ID rate).
+\end{description}
+
+\subsection*{Domain-specific metrics (this work)}
+These were designed specifically for X-ray tomography denoising evaluation.
+\begin{description}
+\item[LoG Response] Multi-scale Laplacian-of-Gaussian response, computed at $\sigma = 1, 2, 4$ and scale-normalized: $\frac{1}{3}\sum_\sigma \sigma^2 \cdot \langle |\nabla^2 G_\sigma * I| \rangle$. Designed to detect sparse structural features at multiple scales. Part of the Local Std / Tenengrad redundancy cluster.
+\item[Noise Est.] Mean absolute value of the double Laplacian (4th spatial derivative): $\langle |(\nabla^2)^2 I| \rangle$. Near zero for over-smoothed images; moderate values indicate preserved fine detail. Part of the Laplacian Var / SML redundancy cluster.
+\item[Contrast Con.\ (Contrast Consistency)] Interquartile range (IQR) of the intensity histogram, normalized by the full intensity range: $\mathrm{IQR} / (I_{max} - I_{min})$. Measures whether the reconstruction preserves contrast diversity. Narrowing IQR indicates over-smoothing.
+\end{description}
+
+\vspace{1em}
+\noindent\textbf{Reference:} Royer, L.A.\ et al.\ (2016). Adaptive light-sheet microscopy for long-term, high-resolution imaging in living organisms. \textit{Nature Biotechnology}, 34(12), 1267--1278.
+\end{document}

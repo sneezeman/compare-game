@@ -1,0 +1,265 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{black!5},
+    frame=single,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    xleftmargin=0.5cm,
+    framexleftmargin=0.5cm,
+}
+
+\title{Compare Game --- Deployment Guide}
+\author{Server Setup \& Recovery Instructions}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\section{Server Setup (from scratch)}
+
+Tested on Hetzner CX22 (4GB RAM), Ubuntu 24.04.
+
+\subsection{System packages}
+
+\begin{lstlisting}
+apt update && apt install -y python3 python3-venv python3-pip git
+\end{lstlisting}
+
+\subsection{Add swap (prevents OOM with large GIFs)}
+
+\begin{lstlisting}
+fallocate -l 4G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+\end{lstlisting}
+
+\subsection{Clone repo and install}
+
+\begin{lstlisting}
+cd /opt
+git clone https://github.com/sneezeman/compare-game
+python3 -m venv /opt/venv
+source /opt/venv/bin/activate
+cd /opt/compare-game/compare_tool
+pip install -r requirements.txt
+pip install gunicorn
+\end{lstlisting}
+
+\subsection{Upload data}
+
+From your laptop:
+\begin{lstlisting}
+scp -r /path/to/data root@SERVER_IP:/opt/compare-game/data/
+\end{lstlisting}
+
+\subsection{Generate SSL certificate}
+
+\begin{lstlisting}
+openssl req -x509 -newkey rsa:2048 \
+    -keyout /opt/key.pem -out /opt/cert.pem \
+    -days 365 -nodes -subj '/CN=compare-game'
+\end{lstlisting}
+
+\subsection{Create users.json}
+
+\begin{lstlisting}
+cat > /opt/compare-game/users.json << 'EOF'
+{
+  "artem": {
+    "password": "CHANGEME",
+    "dirs": ["*"]
+  },
+  "collaborator": {
+    "password": "CHANGEME",
+    "dirs": ["finetune"]
+  }
+}
+EOF
+\end{lstlisting}
+
+\texttt{dirs} controls which subdirectories each user can see. \texttt{["*"]} = full access.
+
+\subsection{Create systemd service}
+
+\begin{lstlisting}
+cat > /etc/systemd/system/compare-game.service << 'EOF'
+[Unit]
+Description=Compare Game
+After=network.target
+
+[Service]
+Type=simple
+Environment="COMPARE_USERS_CONFIG=/opt/compare-game/users.json"
+Environment="COMPARE_DATA_DIR=/opt/compare-game/data/ls3231/"
+WorkingDirectory=/opt/compare-game/compare_tool
+ExecStart=/opt/venv/bin/gunicorn \
+    --certfile /opt/cert.pem \
+    --keyfile /opt/key.pem \
+    --bind 0.0.0.0:443 \
+    --workers 1 --threads 4 \
+    --timeout 300 \
+    wsgi:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+\end{lstlisting}
+
+\subsection{Create wsgi.py (if missing)}
+
+\begin{lstlisting}
+cat > /opt/compare-game/compare_tool/wsgi.py << 'PYEOF'
+import os
+from app import app, load_data_dir, scan_past_results, load_users_config
+import app as app_module
+
+data_dir = os.environ.get('COMPARE_DATA_DIR',
+                          '/opt/compare-game/data/ls3231/')
+app_module.results_dir = os.path.join(data_dir, 'results')
+
+load_users_config()
+load_data_dir(data_dir)
+scan_past_results()
+PYEOF
+\end{lstlisting}
+
+\subsection{Start the service}
+
+\begin{lstlisting}
+systemctl daemon-reload
+systemctl enable compare-game
+systemctl start compare-game
+systemctl status compare-game
+\end{lstlisting}
+
+Access at \texttt{https://SERVER\_IP} (accept the self-signed cert warning once).
+
+\section{Daily Operations}
+
+\subsection{Check status}
+\begin{lstlisting}
+systemctl status compare-game
+journalctl -u compare-game -f        # live logs
+curl -k https://localhost/health      # health check
+\end{lstlisting}
+
+\subsection{Update code}
+\begin{lstlisting}
+cd /opt/compare-game && git pull
+systemctl restart compare-game
+\end{lstlisting}
+
+\subsection{Upload new data}
+\begin{lstlisting}
+# From laptop:
+scp -r /path/to/new/gifs root@SERVER_IP:/opt/compare-game/data/ls3231/
+# Then restart:
+ssh root@SERVER_IP systemctl restart compare-game
+\end{lstlisting}
+
+\subsection{Download results}
+\begin{lstlisting}
+# From laptop:
+scp -r root@SERVER_IP:/opt/compare-game/data/ls3231/results/ ./results/
+\end{lstlisting}
+
+\subsection{Add/change users}
+Edit \texttt{/opt/compare-game/users.json}, then:
+\begin{lstlisting}
+systemctl restart compare-game
+\end{lstlisting}
+
+\subsection{Renew SSL certificate}
+\begin{lstlisting}
+openssl req -x509 -newkey rsa:2048 \
+    -keyout /opt/key.pem -out /opt/cert.pem \
+    -days 365 -nodes -subj '/CN=compare-game'
+systemctl restart compare-game
+\end{lstlisting}
+
+\section{Troubleshooting}
+
+\subsection{App won't start}
+\begin{lstlisting}
+# Check the log:
+journalctl -u compare-game --no-pager | tail -30
+# Common causes:
+#   - Wrong working directory in service file
+#   - Missing venv activation (gunicorn not found)
+#   - Data dir doesn't exist
+\end{lstlisting}
+
+\subsection{Can't connect from browser}
+\begin{lstlisting}
+# Check if listening:
+ss -tlnp | grep 443
+# Check firewall:
+ufw status
+ufw allow 443
+# Test locally:
+curl -k https://localhost/health
+\end{lstlisting}
+
+\subsection{Out of memory}
+\begin{lstlisting}
+# Check memory:
+free -h
+# Check swap:
+swapon --show
+# Restart (clears loaded frames):
+systemctl restart compare-game
+\end{lstlisting}
+
+\subsection{Server hung (not responding)}
+\begin{lstlisting}
+systemctl restart compare-game
+# If that doesn't work:
+pkill -9 -f gunicorn
+systemctl start compare-game
+\end{lstlisting}
+
+\section{Metrics Analysis}
+
+To regenerate the metrics report from tournament results:
+
+\begin{lstlisting}
+cd /path/to/Compare_game/reports
+# Copy results from server if needed:
+scp -r root@SERVER_IP:/opt/compare-game/data/ls3231/results/ results/
+# Generate report:
+python analyze_and_report.py results/ \
+    --output metrics_report.tex --compile
+\end{lstlisting}
+
+Requires: \texttt{texlive-latex-recommended texlive-fonts-recommended texlive-latex-extra}
+
+\section{Key Files}
+
+\begin{tabular}{ll}
+\textbf{File} & \textbf{Purpose} \\
+\hline
+\texttt{compare\_tool/app.py} & Flask application (all routes, auth, logic) \\
+\texttt{compare\_tool/wsgi.py} & Gunicorn entry point (loads data on startup) \\
+\texttt{compare\_tool/tournament.py} & Merge-sort tournament engine \\
+\texttt{compare\_tool/metrics.py} & 20 image quality metrics \\
+\texttt{compare\_tool/gif\_loader.py} & GIF frame extraction, ROI suggestions \\
+\texttt{compare\_tool/static/compare.js} & Frontend logic \\
+\texttt{compare\_tool/templates/index.html} & HTML template \\
+\texttt{compare\_tool/users.example.json} & Example user config \\
+\texttt{reports/analyze\_and\_report.py} & Metrics analysis report generator \\
+\texttt{/opt/compare-game/users.json} & User credentials (server only, not in git) \\
+\texttt{/opt/cert.pem, /opt/key.pem} & SSL certificate (server only) \\
+\end{tabular}
+
+\end{document}
