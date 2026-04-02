@@ -80,13 +80,17 @@ cat > /opt/compare-game/users.json << 'EOF'
   },
   "collaborator": {
     "password": "CHANGEME",
-    "dirs": ["finetune"]
+    "dirs": ["ls3231"]
+  },
+  "intern": {
+    "password": "CHANGEME",
+    "dirs": ["ls3231/finetune"]
   }
 }
 EOF
 \end{lstlisting}
 
-\texttt{dirs} controls which subdirectories each user can see. \texttt{["*"]} = full access.
+\texttt{dirs} controls which dataset subdirectories each user can see, matched as path prefixes against experiment filenames. Examples: \texttt{["*"]} = full access to all datasets, \texttt{["ls3231"]} = one dataset, \texttt{["ls3231/finetune"]} = only finetuning runs within that dataset. \texttt{COMPARE\_DATA\_DIR} must point to the parent directory (e.g.\ \texttt{/opt/compare-game/data/}) so that filenames include the dataset name as a prefix.
 
 \subsection{Create systemd service}
 
@@ -99,7 +103,7 @@ After=network.target
 [Service]
 Type=simple
 Environment="COMPARE_USERS_CONFIG=/opt/compare-game/users.json"
-Environment="COMPARE_DATA_DIR=/opt/compare-game/data/ls3231/"
+Environment="COMPARE_DATA_DIR=/opt/compare-game/data/"
 WorkingDirectory=/opt/compare-game/compare_tool
 ExecStart=/opt/venv/bin/gunicorn \
     --certfile /opt/cert.pem \
@@ -120,16 +124,30 @@ EOF
 
 \begin{lstlisting}
 cat > /opt/compare-game/compare_tool/wsgi.py << 'PYEOF'
-import os
+import os, sys
 from app import app, load_data_dir, scan_past_results, load_users_config
 import app as app_module
 
 data_dir = os.environ.get('COMPARE_DATA_DIR',
                           '/opt/compare-game/data/ls3231/')
+users_cfg = os.environ.get('COMPARE_USERS_CONFIG', '')
+
+print(f'[wsgi] COMPARE_DATA_DIR={data_dir!r}', file=sys.stderr)
+print(f'[wsgi] COMPARE_USERS_CONFIG={users_cfg!r}', file=sys.stderr)
+print(f'[wsgi] data dir exists? {os.path.isdir(data_dir)}', file=sys.stderr)
+print(f'[wsgi] users.json exists? {os.path.isfile(users_cfg) if users_cfg else "NOT SET"}',
+      file=sys.stderr)
+
 app_module.results_dir = os.path.join(data_dir, 'results')
 
 load_users_config()
+print(f'[wsgi] _user_config has {len(app_module._user_config)} user(s)',
+      file=sys.stderr)
+
 load_data_dir(data_dir)
+print(f'[wsgi] experiments has {len(app_module.experiments)} GIF(s)',
+      file=sys.stderr)
+
 scan_past_results()
 PYEOF
 \end{lstlisting}
