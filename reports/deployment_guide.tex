@@ -17,7 +17,7 @@
 
 \title{Compare Game --- Deployment Guide}
 \author{Server Setup \& Recovery Instructions}
-\date{April 2026}
+\date{April 2026 (Caddy-fronted revision)}
 
 \begin{document}
 \maketitle
@@ -26,10 +26,27 @@
 
 Tested on Hetzner CX22 (4GB RAM), Ubuntu 24.04.
 
+\subsection{Architecture}
+
+\begin{verbatim}
+internet --> Caddy (:443, TLS)  -->  gunicorn (127.0.0.1:8001, plain HTTP)
+                                       --> Flask (compare_tool/app.py)
+\end{verbatim}
+
+Caddy terminates TLS and reverse-proxies to gunicorn over loopback. Gunicorn no longer touches SSL — this is critical because gunicorn's \texttt{gthread} worker has no TLS handshake timeout, and earlier deployments were wedged by slow-loris scanners that captured all worker threads inside \texttt{ssl.do\_handshake()}. Caddy has a real handshake timeout and shields the backend.
+
 \subsection{System packages}
 
 \begin{lstlisting}
-apt update && apt install -y python3 python3-venv python3-pip git
+apt update && apt install -y python3 python3-venv python3-pip git \
+    debian-keyring debian-archive-keyring apt-transport-https curl
+
+# Caddy from the official repo (more recent than Ubuntu's package)
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+    | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+    | tee /etc/apt/sources.list.d/caddy-stable.list
+apt update && apt install -y caddy
 \end{lstlisting}
 
 \subsection{Add swap (prevents OOM with large GIFs)}
@@ -63,10 +80,20 @@ scp -r /path/to/data root@SERVER_IP:/opt/compare-game/data/
 
 \subsection{Generate SSL certificate}
 
+The cert \textbf{must include the server's public IP as a Subject Alternative Name}. Caddy (Go's \texttt{crypto/tls}) refuses TLS handshakes when SNI is a bare IP literal and the cert has no matching IP SAN. Replace \texttt{91.99.227.68} with your server's actual public IP.
+
 \begin{lstlisting}
+SERVER_IP=91.99.227.68
 openssl req -x509 -newkey rsa:2048 \
     -keyout /opt/key.pem -out /opt/cert.pem \
-    -days 365 -nodes -subj '/CN=compare-game'
+    -days 365 -nodes \
+    -subj '/CN=compare-game' \
+    -addext "subjectAltName=IP:${SERVER_IP},DNS:localhost,DNS:compare-game"
+
+# Caddy runs as the 'caddy' user — it must be able to read the key
+chown root:caddy /opt/cert.pem /opt/key.pem
+chmod 644 /opt/cert.pem
+chmod 640 /opt/key.pem
 \end{lstlisting}
 
 \subsection{Create users.json}
@@ -94,6 +121,8 @@ EOF
 
 \subsection{Create systemd service}
 
+Gunicorn binds to \texttt{127.0.0.1:8001} only — Caddy will reach it over loopback. \textbf{No SSL flags here}; TLS is Caddy's job.
+
 \begin{lstlisting}
 cat > /etc/systemd/system/compare-game.service << 'EOF'
 [Unit]
@@ -106,9 +135,7 @@ Environment="COMPARE_USERS_CONFIG=/opt/compare-game/users.json"
 Environment="COMPARE_DATA_DIR=/opt/compare-game/data/"
 WorkingDirectory=/opt/compare-game/compare_tool
 ExecStart=/opt/venv/bin/gunicorn \
-    --certfile /opt/cert.pem \
-    --keyfile /opt/key.pem \
-    --bind 0.0.0.0:443 \
+    --bind 127.0.0.1:8001 \
     --workers 1 --threads 4 \
     --timeout 300 \
     wsgi:app
@@ -122,9 +149,12 @@ EOF
 
 \subsection{Create wsgi.py (if missing)}
 
+\texttt{ProxyFix} is essential — without it, every request looks like it came from \texttt{127.0.0.1} and the rate limiter / ban list will lock everyone out after the first bad actor.
+
 \begin{lstlisting}
 cat > /opt/compare-game/compare_tool/wsgi.py << 'PYEOF'
 import os, sys
+from werkzeug.middleware.proxy_fix import ProxyFix
 from app import app, load_data_dir, scan_past_results, load_users_config
 import app as app_module
 
@@ -149,8 +179,62 @@ print(f'[wsgi] experiments has {len(app_module.experiments)} GIF(s)',
       file=sys.stderr)
 
 scan_past_results()
+
+# Caddy on the same host terminates TLS and forwards to us. Trust exactly
+# one upstream proxy hop so request.remote_addr reflects the real client IP.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+print('[wsgi] ProxyFix installed', file=sys.stderr)
 PYEOF
 \end{lstlisting}
+
+\subsection{Configure Caddy}
+
+\begin{lstlisting}
+mkdir -p /var/log/caddy
+touch /var/log/caddy/compare-game.log
+chown caddy:caddy /var/log/caddy/compare-game.log
+chmod 644 /var/log/caddy/compare-game.log
+
+cat > /etc/caddy/Caddyfile << 'CADDY_EOF'
+:443 {
+    tls /opt/cert.pem /opt/key.pem
+
+    reverse_proxy 127.0.0.1:8001 {
+        header_up X-Real-IP {remote_host}
+
+        # Tournament endpoints can take a while when loading new GIFs
+        transport http {
+            response_header_timeout 300s
+            read_timeout 300s
+        }
+    }
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+
+    request_body {
+        max_size 10MB
+    }
+
+    log {
+        output file /var/log/caddy/compare-game.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}
+CADDY_EOF
+
+caddy validate --config /etc/caddy/Caddyfile
+systemctl enable caddy
+systemctl restart caddy
+\end{lstlisting}
+
+If another site already lives in the Caddyfile (e.g.\ a separate project on \texttt{:8443}), \emph{append} this block instead of overwriting --- Caddy supports multiple port-only site blocks in the same file.
 
 \subsection{Start the service}
 
@@ -199,11 +283,17 @@ systemctl restart compare-game
 \end{lstlisting}
 
 \subsection{Renew SSL certificate}
+\textbf{The IP SAN is required.} Re-run the same command from the setup section, then restart \emph{Caddy} (not gunicorn — gunicorn doesn't touch the cert anymore).
 \begin{lstlisting}
+SERVER_IP=91.99.227.68
 openssl req -x509 -newkey rsa:2048 \
     -keyout /opt/key.pem -out /opt/cert.pem \
-    -days 365 -nodes -subj '/CN=compare-game'
-systemctl restart compare-game
+    -days 365 -nodes \
+    -subj '/CN=compare-game' \
+    -addext "subjectAltName=IP:${SERVER_IP},DNS:localhost,DNS:compare-game"
+chown root:caddy /opt/cert.pem /opt/key.pem
+chmod 644 /opt/cert.pem && chmod 640 /opt/key.pem
+systemctl restart caddy
 \end{lstlisting}
 
 \section{Troubleshooting}
@@ -241,10 +331,30 @@ systemctl restart compare-game
 
 \subsection{Server hung (not responding)}
 \begin{lstlisting}
-systemctl restart compare-game
+systemctl restart compare-game caddy
 # If that doesn't work:
-pkill -9 -f gunicorn
-systemctl start compare-game
+pkill -9 -f gunicorn; pkill -9 -f caddy
+systemctl start compare-game caddy
+\end{lstlisting}
+
+If gunicorn says \texttt{active (running)} but \texttt{curl http://127.0.0.1:8001/health} hangs, the worker threads are deadlocked. Dump the Python stack to find which lock:
+\begin{lstlisting}
+/opt/venv/bin/pip install py-spy
+/opt/venv/bin/py-spy dump --pid $(pgrep -f 'gunicorn.*wsgi:app' | tail -1)
+\end{lstlisting}
+
+\subsection{TLS handshake fails (\texttt{internal\_error})}
+
+If \texttt{curl https://SERVER\_IP/} from outside returns \texttt{tlsv1 alert internal error} but \texttt{curl https://localhost/} from the server works, the cert is missing the IP SAN. Regenerate it with the \texttt{-addext "subjectAltName=IP:..."} flag (see \emph{Renew SSL certificate}). Caddy/Go's TLS rejects bare-IP SNI when no matching IP SAN exists.
+
+\subsection{Caddy reload stuck}
+
+If \texttt{systemctl reload caddy} hangs and the journal shows \texttt{permission denied} on a log file, the log file was created by something other than \texttt{caddy} (e.g.\ a half-finished previous run as root). Fix:
+\begin{lstlisting}
+chown caddy:caddy /var/log/caddy/*.log
+chmod 644 /var/log/caddy/*.log
+systemctl reset-failed caddy
+systemctl restart caddy
 \end{lstlisting}
 
 \section{Metrics Analysis}
@@ -277,7 +387,9 @@ Requires: \texttt{texlive-latex-recommended texlive-fonts-recommended texlive-la
 \texttt{compare\_tool/users.example.json} & Example user config \\
 \texttt{reports/analyze\_and\_report.py} & Metrics analysis report generator \\
 \texttt{/opt/compare-game/users.json} & User credentials (server only, not in git) \\
-\texttt{/opt/cert.pem, /opt/key.pem} & SSL certificate (server only) \\
+\texttt{/opt/cert.pem, /opt/key.pem} & SSL certificate (server only, must have IP SAN) \\
+\texttt{/etc/caddy/Caddyfile} & Caddy reverse proxy config (server only) \\
+\texttt{/etc/systemd/system/compare-game.service} & gunicorn unit (binds 127.0.0.1:8001) \\
 \end{tabular}
 
 \end{document}

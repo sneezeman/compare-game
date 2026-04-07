@@ -5,6 +5,15 @@ Screenshots/
 # PDFs
 *.pdf
 
+# LaTeX intermediates
+*.aux
+*.log
+*.out
+*.toc
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+
 # Exported results
 *.tsv
 
