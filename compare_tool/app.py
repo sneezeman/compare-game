@@ -81,8 +81,8 @@ _BAN_WINDOW = 300    # within this many seconds
 def check_auth():
     ip = request.remote_addr
 
-    # Health check — exempt from auth
-    if request.path == '/health':
+    # Health check and logout — exempt from auth
+    if request.path in ('/health', '/logout'):
         return
 
     # Drop banned IPs (expire after 1 hour)
@@ -119,6 +119,13 @@ def check_auth():
         return ('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Compare Game"'})
 
     g.username = auth.username
+
+@app.route('/logout')
+def logout():
+    """Force the browser to drop its cached Basic-auth credentials."""
+    return ('Logged out. <a href="/">Log in again</a>', 401,
+            {'WWW-Authenticate': 'Basic realm="Compare Game"'})
+
 
 def _check_exp_access(exp_id):
     """Check if current user can access this experiment. Returns (exp, None) or (None, (error_response, code))."""
@@ -306,23 +313,24 @@ def list_past_results():
     return jsonify(results=filtered)
 
 
-@app.route('/api/past-results/<filename>')
+@app.route('/api/past-results/<path:filename>')
 def get_past_result(filename):
     """Download a past result TSV file (access-checked)."""
-    safe_name = os.path.basename(filename)
-    path = os.path.join(results_dir, safe_name)
+    path = os.path.normpath(os.path.join(results_dir, filename))
+    if not path.startswith(os.path.normpath(results_dir) + os.sep):
+        return jsonify(error='Invalid path'), 400
     if not os.path.isfile(path):
         return jsonify(error='Result not found'), 404
     # Check if user can access any GIF in this result
     username = getattr(g, 'username', None)
     if username:
-        matching = [r for r in past_results if r['filename'] == safe_name]
+        matching = [r for r in past_results if r['filename'] == filename]
         if matching:
             gifs = matching[0].get('gifs', [])
             if not any(_user_can_access(username, gif) for gif in gifs):
                 return jsonify(error='Access denied'), 403
     return send_file(path, mimetype='text/tab-separated-values',
-                     as_attachment=True, download_name=safe_name)
+                     as_attachment=True, download_name=os.path.basename(filename))
 
 
 @app.route('/api/frame/<exp_id>/<int:epoch>')
@@ -859,8 +867,13 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         filename = f'tournament_{timestamp}.tsv'
-        save_path = os.path.join(results_dir, filename)
-        os.makedirs(results_dir, exist_ok=True)
+
+        # Mirror the experiment folder structure inside results_dir
+        gif_dirs = [os.path.dirname(gn) for gn in gif_names]
+        sub_dir = os.path.commonpath(gif_dirs) if gif_dirs else ''
+        dest_dir = os.path.join(results_dir, sub_dir)
+        os.makedirs(dest_dir, exist_ok=True)
+        save_path = os.path.join(dest_dir, filename)
 
         with open(save_path, 'w') as f:
             f.write('\n'.join(lines) + '\n')
@@ -953,13 +966,13 @@ def scan_past_results():
         return
 
 
-    for tsv_path in sorted(glob_mod.glob(os.path.join(results_dir, '*.tsv')), reverse=True):
+    for tsv_path in sorted(glob_mod.glob(os.path.join(results_dir, '**', '*.tsv'), recursive=True), reverse=True):
         try:
             with open(tsv_path) as f:
                 lines = f.readlines()
 
             info = {
-                'filename': os.path.basename(tsv_path),
+                'filename': os.path.relpath(tsv_path, results_dir),
                 'date': '',
                 'user': '',
                 'gifs': [],
@@ -1084,7 +1097,9 @@ if __name__ == '__main__':
         cli_epoch_config['raw_first'] = True
 
     import sys
-    sys.modules[__name__].results_dir = args.results_dir or os.path.join(args.data_dir, 'results')
+    sys.modules[__name__].results_dir = (args.results_dir
+                                         or os.environ.get('COMPARE_RESULTS_DIR')
+                                         or os.path.join(args.data_dir, 'results'))
 
     print(f'Scanning GIFs from {args.data_dir}...')
     load_data_dir(args.data_dir, cli_epoch_config)
