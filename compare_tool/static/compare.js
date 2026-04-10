@@ -168,6 +168,13 @@ async function loadPreloaded() {
                 contents.appendChild(div);
             });
 
+            // Auto-collapse folders where every experiment is done
+            const allDone = tree[dirPath].some(exp => exp.has_results);
+            if (allDone) {
+                contents.classList.add('collapsed');
+                header.querySelector('.dir-toggle').innerHTML = '&#9654;';
+            }
+
             dirDiv.appendChild(contents);
             list.appendChild(dirDiv);
         });
@@ -181,6 +188,18 @@ async function loadPreloaded() {
         });
     } catch (e) {
         // ignore
+    }
+}
+
+function togglePastResults() {
+    const list = document.getElementById('past-results-list');
+    const toggle = document.getElementById('past-results-toggle');
+    if (list.style.display === 'none') {
+        list.style.display = 'block';
+        toggle.innerHTML = '&#9660;';
+    } else {
+        list.style.display = 'none';
+        toggle.innerHTML = '&#9654;';
     }
 }
 

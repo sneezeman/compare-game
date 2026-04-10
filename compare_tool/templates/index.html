@@ -26,8 +26,10 @@
         </div>
 
         <div id="past-results-section" style="display: none;">
-            <h3>Past Results</h3>
-            <div id="past-results-list"></div>
+            <h3 class="toggle-header" onclick="togglePastResults()" style="cursor: pointer; user-select: none;">
+                <span id="past-results-toggle">&#9654;</span> Past Results
+            </h3>
+            <div id="past-results-list" style="display: none;"></div>
         </div>
     </div>
 
