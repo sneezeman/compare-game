@@ -144,6 +144,66 @@ def compute_top3_agreement(info, metric_name, higher_is_better=True):
     return agreement, top1_in_human_top3
 
 
+def compute_safe_elimination(info, metric_name, higher_is_better=True, eliminate_frac=0.5):
+    """Check if eliminating the bottom eliminate_frac by metric preserves all human top-3.
+    Returns number of human top-3 that survive (3 = all safe, 0 = all lost)."""
+    candidates = info['candidates']
+    n = len(candidates)
+    if n < 4:
+        return None
+
+    human_top3 = set(c['label'] for c in candidates[:3])
+
+    metric_sorted = sorted(
+        candidates,
+        key=lambda c: c['metrics'].get(metric_name, 0),
+        reverse=higher_is_better,
+    )
+
+    # Keep the top (1 - eliminate_frac), but always keep at least 3
+    n_keep = max(3, int(math.ceil(n * (1 - eliminate_frac))))
+    kept = set(c['label'] for c in metric_sorted[:n_keep])
+
+    return len(human_top3 & kept)
+
+
+def analyze_elimination(files, metric_names):
+    """For each metric, compute safe elimination rates at various thresholds."""
+    thresholds = [0.25, 0.50, 0.75]
+    results = {}
+
+    for name in metric_names:
+        best_dir = {}  # threshold -> {rate, inverted}
+        for elim in thresholds:
+            for hib in (True, False):
+                survivals = []
+                for f in files:
+                    if name not in f['candidates'][0]['metrics']:
+                        continue
+                    s = compute_safe_elimination(f, name, higher_is_better=hib, eliminate_frac=elim)
+                    if s is not None:
+                        survivals.append(s)
+                if not survivals:
+                    continue
+                # "safe" = all 3 human top-3 survived
+                safe_rate = sum(1 for s in survivals if s == 3) / len(survivals) * 100
+                avg_survival = np.mean(survivals) / 3 * 100
+
+                key = (elim, hib)
+                if elim not in best_dir or safe_rate > best_dir[elim]['safe_rate']:
+                    best_dir[elim] = {
+                        'safe_rate': safe_rate,
+                        'avg_survival': avg_survival,
+                        'inverted': not hib,
+                        'n_files': len(survivals),
+                    }
+
+        if best_dir:
+            results[name] = best_dir
+
+    return results
+
+
 def analyze_files(files):
     """Run full analysis on a list of parsed files."""
     if not files:
@@ -315,7 +375,65 @@ def generate_results_table(results, metric_names, title, n_files, n_candidates_a
     return '\n'.join(lines)
 
 
+def generate_elimination_table(elim_results, metric_names, title, n_files):
+    """Generate a LaTeX table for safe elimination analysis."""
+    if not elim_results:
+        return ''
+
+    # Sort by safe rate at 50% elimination
+    sorted_metrics = sorted(
+        [(name, elim_results[name]) for name in metric_names if name in elim_results],
+        key=lambda x: x[1].get(0.50, {}).get('safe_rate', 0),
+        reverse=True,
+    )
+
+    lines = []
+    lines.append(f'\\section{{Safe Elimination: {title} ({n_files} tournaments)}}')
+    lines.append('')
+    lines.append('If we use a metric to discard the worst candidates before human inspection, ')
+    lines.append('how often do \\emph{all three} human-preferred epochs survive the cut? ')
+    lines.append('A metric with 100\\% safe rate at 50\\% elimination means we can always ')
+    lines.append('throw away half the candidates by that metric without losing any human favorite.')
+    lines.append('')
+    lines.append('\\vspace{0.5em}')
+    lines.append('\\begin{center}')
+    lines.append('\\small')
+    lines.append('\\begin{tabular}{clccc}')
+    lines.append('\\toprule')
+    lines.append('\\textbf{\\#} & \\textbf{Metric} & '
+                 '\\textbf{Cut 25\\%} & \\textbf{Cut 50\\%} & \\textbf{Cut 75\\%} \\\\')
+    lines.append('\\midrule')
+
+    for i, (name, thresholds) in enumerate(sorted_metrics):
+        inv = ' (inv.)' if thresholds.get(0.50, {}).get('inverted', False) else ''
+        disp_name = escape_tex(name) + inv
+        cols = []
+        for t in [0.25, 0.50, 0.75]:
+            if t in thresholds:
+                rate = thresholds[t]['safe_rate']
+                cols.append(f'{rate:.0f}\\%')
+            else:
+                cols.append('---')
+
+        rate_50 = thresholds.get(0.50, {}).get('safe_rate', 0)
+        if rate_50 >= 90:
+            lines.append(f'\\rowcolor{{toprow}} {i+1} & {disp_name} & {" & ".join(cols)} \\\\')
+        elif rate_50 >= 75:
+            lines.append(f'\\rowcolor{{midrow}} {i+1} & {disp_name} & {" & ".join(cols)} \\\\')
+        elif rate_50 < 60:
+            lines.append(f'\\rowcolor{{botrow}} {i+1} & {disp_name} & {" & ".join(cols)} \\\\')
+        else:
+            lines.append(f'{i+1} & {disp_name} & {" & ".join(cols)} \\\\')
+
+    lines.append('\\bottomrule')
+    lines.append('\\end{tabular}')
+    lines.append('\\end{center}')
+    lines.append('')
+    return '\n'.join(lines)
+
+
 def generate_report(training_results, finetuning_results, clusters,
+                    elim_training, elim_finetuning,
                     training_metric_names, finetuning_metric_names,
                     n_training, n_finetuning, n_total,
                     output_path):
@@ -373,6 +491,16 @@ For reference, chance-level performance for random selection: training tiles ($\
             finetuning_results, finetuning_metric_names,
             'Finetuning', n_finetuning, 20))
 
+    # Safe elimination
+    if elim_finetuning:
+        lines.append(generate_elimination_table(
+            elim_finetuning, finetuning_metric_names,
+            'Finetuning', n_finetuning))
+    if elim_training:
+        lines.append(generate_elimination_table(
+            elim_training, training_metric_names,
+            'Training Tiles', n_training))
+
     # Redundancy
     if clusters:
         lines.append(r'\section{Metric Redundancy}')
@@ -414,6 +542,20 @@ For reference, chance-level performance for random selection: training tiles ($\
     if best_ft[0] != 'N/A':
         lines.append(f'\\item \\textbf{{{escape_tex(best_ft[0])} is the most practically useful metric}} '
                      f'for finetuning ({best_ft[1]["top1_rate"]:.0f}\\% top-1 ID rate).')
+
+    # Find best eliminator
+    if elim_finetuning:
+        best_elim = sorted(elim_finetuning.items(),
+                           key=lambda x: x[1].get(0.50, {}).get('safe_rate', 0),
+                           reverse=True)
+        if best_elim:
+            be_name, be_data = best_elim[0]
+            be_rate = be_data.get(0.50, {}).get('safe_rate', 0)
+            lines.append(f'\\item \\textbf{{Metrics are more reliable for eliminating the worst '
+                         f'than for picking the best.}} '
+                         f'{escape_tex(be_name)} safely eliminates 50\\% of candidates '
+                         f'while preserving all human top-3 picks in {be_rate:.0f}\\% of tournaments. '
+                         f'Recommended workflow: use metrics to pre-filter, then compare the survivors visually.')
 
     n_droppable = sum(len(c['metrics']) - 1 for c in clusters)
     if n_droppable > 0:
@@ -579,6 +721,10 @@ def main():
     all_names = sorted(set((training_names or []) + (finetuning_names or [])))
     clusters = find_redundancy_clusters(parsed, all_names) if len(parsed) > 1 else []
 
+    # Safe elimination analysis
+    elim_training = analyze_elimination(training, training_names) if training else {}
+    elim_finetuning = analyze_elimination(finetuning, finetuning_names) if finetuning else {}
+
     # Print summary
     print('\n=== TRAINING TILES ===')
     if training_results:
@@ -598,6 +744,19 @@ def main():
     else:
         print('  No finetuning data')
 
+    print('\n=== SAFE ELIMINATION (finetuning) ===')
+    if elim_finetuning:
+        # Sort by safe rate at 50% elimination
+        sorted_e = sorted(elim_finetuning.items(),
+                          key=lambda x: x[1].get(0.50, {}).get('safe_rate', 0), reverse=True)
+        for name, thresholds in sorted_e[:10]:
+            rates = []
+            for t in [0.25, 0.50, 0.75]:
+                if t in thresholds:
+                    rates.append(f'{t:.0%}→{thresholds[t]["safe_rate"]:.0f}%')
+            inv = ' (inv)' if thresholds.get(0.50, {}).get('inverted', False) else ''
+            print(f'  {name}{inv}: {", ".join(rates)}')
+
     print(f'\n=== REDUNDANCY CLUSTERS ({len(clusters)}) ===')
     for cl in clusters:
         print(f'  {", ".join(cl["metrics"])} (|r| = {cl["r_range"][0]:.2f}-{cl["r_range"][1]:.2f})')
@@ -606,9 +765,11 @@ def main():
     output = args.output or os.path.join(args.results_dir, 'metrics_report.tex')
     generate_report(
         training_results, finetuning_results, clusters,
-        training_names or [], finetuning_names or [],
-        len(training), len(finetuning), len(parsed),
-        output,
+        elim_training, elim_finetuning,
+        training_metric_names=training_names or [],
+        finetuning_metric_names=finetuning_names or [],
+        n_training=len(training), n_finetuning=len(finetuning), n_total=len(parsed),
+        output_path=output,
     )
 
     if args.compile:

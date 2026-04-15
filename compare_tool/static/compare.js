@@ -642,16 +642,121 @@ function applyROISuggestion(x, y, w, h) {
     ctx.fillRect(x, y, w, h);
 }
 
+// =========================================================================
+// Phase 2.5: Pre-filter
+// =========================================================================
+
+let prefilterCandidates = [];  // sorted by score
+let prefilterCutoff = 0;
+
+async function showPrefilter() {
+    showPhase('prefilter');
+    const keepGrid = document.getElementById('pf-keep-grid');
+    const cutGrid = document.getElementById('pf-cut-grid');
+    keepGrid.innerHTML = '<p style="color:#888">Computing metrics for all candidates...</p>';
+    cutGrid.innerHTML = '';
+
+    try {
+        const expsConfig = state.selected.map(s => ({ exp_id: s.expId }));
+        const resp = await fetch('/api/prefilter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ experiments: expsConfig, roi: state.roi, r_o: state.rO }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+            keepGrid.innerHTML = `<p style="color:#e94560">Error: ${data.error || resp.status}. Use "Skip" to proceed.</p>`;
+            return;
+        }
+
+        prefilterCandidates = data.candidates;
+        prefilterCutoff = data.cutoff;
+
+        // Mark candidates above/below cutoff
+        prefilterCandidates.forEach((c, i) => { c._excluded = i >= prefilterCutoff; });
+
+        renderPrefilterGrid();
+    } catch (e) {
+        keepGrid.innerHTML = `<p style="color:#e94560">Failed: ${e.message}. Use "Skip" to proceed.</p>`;
+    }
+}
+
+let pfCardSize = 200;
+
+function renderPrefilterGrid() {
+    const keepGrid = document.getElementById('pf-keep-grid');
+    const cutGrid = document.getElementById('pf-cut-grid');
+    const roiParam = state.roi ? `&roi=${state.roi}` : '';
+    keepGrid.innerHTML = '';
+    cutGrid.innerHTML = '';
+
+    prefilterCandidates.forEach((c, i) => {
+        const card = document.createElement('div');
+        card.className = 'prefilter-card' + (c._excluded ? ' pf-excluded' : '');
+        card.style.width = pfCardSize + 'px';
+        card.onclick = () => {
+            c._excluded = !c._excluded;
+            renderPrefilterGrid();
+        };
+
+        const thumbUrl = `/api/frame/${c.exp_id}/${c.epoch}?w=${pfCardSize}${roiParam}`;
+        card.innerHTML = `
+            <span class="pf-rank">#${i + 1}</span>
+            <img src="${thumbUrl}" alt="${escapeHtml(c.label)}" loading="lazy">
+            <div class="pf-label">${escapeHtml(c.label)}<br><span style="font-size:0.85em;color:#666">score: ${c.score.toFixed(2)}</span></div>
+        `;
+
+        if (c._excluded) {
+            cutGrid.appendChild(card);
+        } else {
+            keepGrid.appendChild(card);
+        }
+    });
+
+    updatePrefilterCount();
+}
+
+function resizePrefilter(val) {
+    pfCardSize = parseInt(val);
+    document.getElementById('pf-size-label').textContent = val + 'px';
+    document.querySelectorAll('.prefilter-card').forEach(card => {
+        card.style.width = val + 'px';
+    });
+}
+
+function updatePrefilterCount() {
+    const kept = prefilterCandidates.filter(c => !c._excluded).length;
+    const cut = prefilterCandidates.filter(c => c._excluded).length;
+    document.getElementById('prefilter-keep-count').textContent = kept;
+    document.getElementById('pf-keep-n').textContent = kept;
+    document.getElementById('pf-cut-n').textContent = cut;
+}
+
+function skipPrefilter() {
+    // Clear exclusions and start tournament
+    prefilterCandidates.forEach(c => { c._excluded = false; });
+    startTournament();
+}
+
+function applyPrefilter() {
+    startTournament();
+}
+
 async function startTournament() {
     if (state.submitting) return;
     state.submitting = true;
     try {
         const expsConfig = state.selected.map(s => ({ exp_id: s.expId }));
 
+        // Build exclusion list from pre-filter
+        const exclude = prefilterCandidates
+            .filter(c => c._excluded)
+            .map(c => ({ exp_id: c.exp_id, epoch: c.epoch }));
+
         const resp = await fetch('/api/tournament/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ experiments: expsConfig, roi: state.roi, r_o: state.rO, user_name: state.userName }),
+            body: JSON.stringify({ experiments: expsConfig, roi: state.roi, r_o: state.rO, user_name: state.userName, exclude }),
         });
         if (!resp.ok) { alert('Server error: ' + resp.status); return; }
         const data = await resp.json();
@@ -805,49 +910,108 @@ async function loadComparison() {
     }
 }
 
+function metricRow(a, b) {
+    const hib = a.higher_is_better;
+    const aWins = hib ? a.value > b.value : a.value < b.value;
+    const bWins = hib ? b.value > a.value : b.value < a.value;
+    const maxVal = Math.max(Math.abs(a.value), Math.abs(b.value), 1e-10);
+    const relDiff = Math.abs(a.value - b.value) / maxVal;
+    const intensity = Math.min(1, Math.sqrt(relDiff * 5));
+    const winColor = `rgba(78, 255, 78, ${0.15 + intensity * 0.85})`;
+    const loseColor = `rgba(136, 136, 136, ${0.4 + (1 - intensity) * 0.6})`;
+    const aStyle = aWins ? `color:${winColor};font-weight:700` : (bWins ? `color:${loseColor}` : '');
+    const bStyle = bWins ? `color:${winColor};font-weight:700` : (aWins ? `color:${loseColor}` : '');
+    return { aStyle, bStyle, aWins, bWins };
+}
+
 function renderMetricsTable() {
     const table = document.getElementById('metrics-table');
     const ll = escapeHtml(state.currentPair.left.label);
     const rl = escapeHtml(state.currentPair.right.label);
     const thead = `<tr><th>Metric</th><th class="label-left">${ll}</th><th class="label-right">${rl}</th></tr>`;
 
-    let rows = '';
+    // Group metrics by cluster
+    const grouped = {};   // group name -> [{a, b, index}]
+    const standalone = []; // [{a, b, index}]
     for (let i = 0; i < state.metricsA.length; i++) {
         const a = state.metricsA[i];
         const b = state.metricsB[i];
-        const hib = a.higher_is_better;
-        const aWins = hib ? a.value > b.value : a.value < b.value;
-        const bWins = hib ? b.value > a.value : b.value < a.value;
-
-        // Color intensity based on relative difference
-        const maxVal = Math.max(Math.abs(a.value), Math.abs(b.value), 1e-10);
-        const relDiff = Math.abs(a.value - b.value) / maxVal;
-        // Map to 0-1 intensity: sqrt for perceptual scaling, cap at 1
-        const intensity = Math.min(1, Math.sqrt(relDiff * 5));
-
-        const winColor = `rgba(78, 255, 78, ${0.15 + intensity * 0.85})`;
-        const loseColor = `rgba(136, 136, 136, ${0.4 + (1 - intensity) * 0.6})`;
-
-        const aStyle = aWins ? `color:${winColor};font-weight:700` : (bWins ? `color:${loseColor}` : '');
-        const bStyle = bWins ? `color:${winColor};font-weight:700` : (aWins ? `color:${loseColor}` : '');
-        const rowClass = a.name === 'NHWTSE' ? 'metric-highlight' : '';
-
-        rows += `<tr class="${rowClass}">
-            <td>${escapeHtml(a.name)}</td>
-            <td style="${aStyle}">${a.value.toFixed(4)}</td>
-            <td style="${bStyle}">${b.value.toFixed(4)}</td>
-        </tr>`;
+        if (a.group) {
+            if (!grouped[a.group]) grouped[a.group] = [];
+            grouped[a.group].push({ a, b, i });
+        } else {
+            standalone.push({ a, b, i });
+        }
     }
+
+    let rows = '';
+
+    // Render grouped metrics
+    for (const [groupName, members] of Object.entries(grouped)) {
+        const rep = members.find(m => m.a.representative) || members[0];
+        const others = members.filter(m => m !== rep);
+        const groupId = 'mg-' + groupName.replace(/[^a-zA-Z0-9]/g, '_');
+
+        // Count how many metrics agree on which side wins
+        let leftWins = 0, rightWins = 0;
+        members.forEach(m => {
+            const { aWins, bWins } = metricRow(m.a, m.b);
+            if (aWins) leftWins++;
+            if (bWins) rightWins++;
+        });
+        const consensus = leftWins > rightWins ? 'left' : (rightWins > leftWins ? 'right' : 'tie');
+        const consensusLabel = consensus === 'tie' ? 'tie' : `${Math.max(leftWins, rightWins)}/${members.length}`;
+
+        // Group header (clickable to expand/collapse)
+        rows += `<tr class="metric-group-header" onclick="toggleMetricGroup('${groupId}')">
+            <td><span class="mg-toggle" id="${groupId}-toggle">&#9654;</span> ${escapeHtml(groupName)}</td>
+            <td colspan="2" style="text-align:center;color:#666;font-size:0.85em">${consensusLabel} agree</td>
+        </tr>`;
+
+        // Representative metric (always visible)
+        const r = metricRow(rep.a, rep.b);
+        rows += `<tr>
+            <td>${escapeHtml(rep.a.name)}</td>
+            <td style="${r.aStyle}">${rep.a.value.toFixed(4)}</td>
+            <td style="${r.bStyle}">${rep.b.value.toFixed(4)}</td>
+        </tr>`;
+
+        // Other members (hidden by default)
+        others.forEach(m => {
+            const r2 = metricRow(m.a, m.b);
+            rows += `<tr class="metric-group-member" data-group="${groupId}">
+                <td>${escapeHtml(m.a.name)}</td>
+                <td style="${r2.aStyle}">${m.a.value.toFixed(4)}</td>
+                <td style="${r2.bStyle}">${m.b.value.toFixed(4)}</td>
+            </tr>`;
+        });
+    }
+
+    // Render standalone metrics
+    standalone.forEach(({ a, b }) => {
+        const r = metricRow(a, b);
+        rows += `<tr>
+            <td>${escapeHtml(a.name)}</td>
+            <td style="${r.aStyle}">${a.value.toFixed(4)}</td>
+            <td style="${r.bStyle}">${b.value.toFixed(4)}</td>
+        </tr>`;
+    });
 
     table.innerHTML = thead + rows;
 }
 
+function toggleMetricGroup(groupId) {
+    const members = document.querySelectorAll(`[data-group="${groupId}"]`);
+    const toggle = document.getElementById(groupId + '-toggle');
+    const expanded = members[0] && members[0].classList.contains('expanded');
+    members.forEach(m => m.classList.toggle('expanded'));
+    toggle.innerHTML = expanded ? '&#9654;' : '&#9660;';
+}
+
 function highlightMetrics(side) {
-    const ths = document.querySelectorAll('#metrics-table th');
-    if (ths.length >= 3) {
-        ths[1].style.opacity = side === 'left' ? '1' : '0.5';
-        ths[2].style.opacity = side === 'right' ? '1' : '0.5';
-    }
+    const table = document.getElementById('metrics-table');
+    table.classList.remove('highlight-left', 'highlight-right');
+    if (side) table.classList.add('highlight-' + side);
 }
 
 async function submitChoice(winner) {
@@ -950,7 +1114,7 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
     for (let i = 0; i < top3.length; i++) {
         const div = document.createElement('div');
         div.className = 'podium-item';
-        div.innerHTML = `<div class="rank">${medals[i]}</div><div class="epoch-num">${escapeHtml(top3[i].full_label || top3[i].label)}</div>`;
+        div.innerHTML = `<div class="rank">${medals[i]}</div><div class="epoch-num">${escapeHtml(top3[i].label)}</div>`;
         podium.appendChild(div);
     }
 
@@ -989,7 +1153,7 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
 
     let rows = '';
     for (let i = 0; i < ranking.length; i++) {
-        rows += `<tr><td>${i + 1}</td><td>${escapeHtml(ranking[i].full_label || ranking[i].label)}</td>`;
+        rows += `<tr><td>${i + 1}</td><td>${escapeHtml(ranking[i].label)}</td>`;
         allMetrics[i].forEach((m, mi) => {
             const range = metricMaxs[mi] - metricMins[mi];
             const t = range > 0 ? (m.value - metricMins[mi]) / range : 0.5;

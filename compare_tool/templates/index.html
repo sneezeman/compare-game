@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Compare Game - Epoch Comparison Tool</title>
-    <link rel="stylesheet" href="/static/style.css?v=12">
+    <link rel="stylesheet" href="/static/style.css?v=16">
 </head>
 <body>
     <h1>Compare Game</h1>
@@ -79,8 +79,39 @@
         <p id="roi-info" class="center-row" style="margin-top: 8px; font-weight: 600;"></p>
 
         <div class="center-row">
-            <button id="start-tournament-btn" class="btn" disabled onclick="startTournament()">
+            <button id="start-tournament-btn" class="btn" disabled onclick="showPrefilter()">
                 Start Comparison
+            </button>
+        </div>
+    </div>
+
+    <!-- Phase 2.5: Pre-filter -->
+    <div id="phase-prefilter" class="phase">
+        <h3 class="center-row">Pre-filter by Metrics</h3>
+        <p class="center-row" style="color: #888; margin-bottom: 4px;">
+            Candidates sorted by metric consensus. Click any thumbnail to move it between columns.
+        </p>
+        <div class="size-slider-row">
+            <label>Image size: <input type="range" id="pf-size-slider" min="100" max="500" value="200" step="20"
+                oninput="resizePrefilter(this.value)"></label>
+            <span id="pf-size-label">200px</span>
+        </div>
+        <div class="prefilter-columns">
+            <div class="pf-col">
+                <div class="pf-col-header pf-col-keep">Keeping <span id="pf-keep-n">0</span></div>
+                <div id="pf-keep-grid" class="prefilter-grid"></div>
+            </div>
+            <div class="pf-col">
+                <div class="pf-col-header pf-col-cut">Removing <span id="pf-cut-n">0</span></div>
+                <div id="pf-cut-grid" class="prefilter-grid"></div>
+            </div>
+        </div>
+        <div class="center-row" style="margin-top: 16px; gap: 12px;">
+            <button class="btn" onclick="applyPrefilter()">
+                Start Comparison (<span id="prefilter-keep-count">0</span> candidates)
+            </button>
+            <button class="btn btn-secondary" onclick="skipPrefilter()">
+                Skip — keep all
             </button>
         </div>
     </div>
@@ -135,6 +166,6 @@
         </div>
     </div>
 
-    <script src="/static/compare.js?v=12"></script>
+    <script src="/static/compare.js?v=16"></script>
 </body>
 </html>

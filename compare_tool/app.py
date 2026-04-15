@@ -21,7 +21,7 @@ from PIL import Image
 
 from gif_loader import (compute_variability_map, extract_frames,
                         suggest_rois, variability_to_heatmap_rgba)
-from metrics import compute_all, compute_metric_zscores
+from metrics import compute_all, compute_metric_zscores, METRIC_GROUPS
 from tournament import Tournament
 
 app = Flask(__name__)
@@ -136,6 +136,34 @@ def _check_exp_access(exp_id):
     if username and not _user_can_access(username, exp['filename']):
         return None, (jsonify(error='Access denied'), 403)
     return exp, None
+
+
+def _format_exp_label(filename):
+    """Extract a readable short label from an experiment filename.
+    'ls3639/NM0029/finetune/NM0029_HT_100nm_T008_0001_rec__from_NM0029_HT_100nm_T000_0001_rec__140/all_epochs_view1_141-150.gif'
+    → 'T008←T000@140 view1'
+    """
+    parts = filename.replace('\\', '/').split('/')
+    gif_name = parts[-1] if parts else filename
+    dir_name = parts[-2] if len(parts) >= 2 else ''
+
+    # Extract view from gif name
+    view = ''
+    vm = re.search(r'view(\d+)', gif_name)
+    if vm:
+        view = f' view{vm.group(1)}'
+
+    # Finetuning: ..._T001_0001_rec__from_..._T000_0001_rec__155
+    ft = re.search(r'_?(T\d+)_\d+_rec__from_\w+_(T\d+)_\d+_rec__(\d+)', dir_name)
+    if ft:
+        return f'{ft.group(1)}\u2190{ft.group(2)}@{ft.group(3)}{view}'
+
+    # Training tile: ..._T000_0001_rec_
+    tr = re.search(r'_?(T\d+)_\d+_rec_?$', dir_name)
+    if tr:
+        return f'{tr.group(1)}{view}'
+
+    return gif_name
 
 
 def _cleanup_old_tournaments():
@@ -348,6 +376,19 @@ def get_frame(exp_id, epoch):
     img = exp['frames'][epoch]
     img = _apply_roi(img, request.args.get('roi'))
 
+    # Optional resize for thumbnails: ?w=140
+    w = request.args.get('w')
+    if w:
+        w = int(w)
+        h, orig_w = img.shape[:2]
+        new_h = max(1, int(h * w / orig_w))
+        pil_img = Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8))
+        pil_img = pil_img.resize((w, new_h), Image.LANCZOS)
+        buf = io.BytesIO()
+        pil_img.save(buf, format='PNG')
+        buf.seek(0)
+        return send_file(buf, mimetype='image/png')
+
     return _numpy_to_png_response(img)
 
 
@@ -411,8 +452,18 @@ def get_metrics(exp_id, epoch):
     roi_str = request.args.get('roi')
 
     results = _get_cached_metrics(exp_id, epoch, roi_str, r_o)
+
+    # Build lookup: metric name -> group info
+    group_lookup = {}
+    for grp in METRIC_GROUPS:
+        for m in grp['members']:
+            group_lookup[m] = {'group': grp['name'], 'representative': m == grp['representative']}
+
     return jsonify(metrics=[
-        {'name': name, 'value': round(val, 6), 'higher_is_better': hib}
+        {
+            'name': name, 'value': round(val, 6), 'higher_is_better': hib,
+            **group_lookup.get(name, {}),
+        }
         for name, val, hib in results
     ])
 
@@ -457,6 +508,102 @@ def set_epoch_config():
     return jsonify(ok=True)
 
 
+@app.route('/api/prefilter', methods=['POST'])
+def prefilter():
+    """Compute metrics for all candidates and return them sorted by consensus score.
+    Body: {experiments: [{exp_id}, ...], r_o: 0.5, roi: "x,y,w,h", cut_frac: 0.25}
+    Returns sorted candidates with scores and a cutoff index."""
+    data = request.get_json(force=True) if request.data else {}
+    exps_config = data.get('experiments', [])
+    r_o = float(data.get('r_o', 0.5))
+    roi = data.get('roi')
+    cut_frac = float(data.get('cut_frac', 0.25))
+
+    if not exps_config:
+        return jsonify(error='No experiments specified'), 400
+
+    # Build candidate list (same logic as start_tournament)
+    candidates = []
+    for ec in exps_config:
+        exp, err = _check_exp_access(ec['exp_id'])
+        if err:
+            return err
+        exp = _ensure_loaded(ec['exp_id'])
+        if not exp:
+            return jsonify(error=f'Experiment {ec["exp_id"]} not found'), 404
+        epoch_labels = exp.get('epoch_labels',
+                               [f'Ep.{i + 1}' for i in range(exp['num_epochs'])])
+        raw_first = exp.get('epoch_config', {}).get('raw_first', False)
+        for epoch in range(exp['num_epochs']):
+            if raw_first and epoch == 0:
+                continue
+            epoch_label = epoch_labels[epoch] if epoch < len(epoch_labels) else f'Ep.{epoch + 1}'
+            candidates.append({
+                'exp_id': ec['exp_id'],
+                'epoch': epoch,
+                'label': epoch_label,
+            })
+
+    if len(candidates) < 4:
+        return jsonify(error='Too few candidates for pre-filtering'), 400
+
+    # Compute metrics for each candidate
+    # Build set of representative metric names for consensus scoring
+    rep_names = set()
+    grouped_names = set()
+    for grp in METRIC_GROUPS:
+        rep_names.add(grp['representative'])
+        grouped_names.update(grp['members'])
+
+    scored = []
+    for c in candidates:
+        metrics = _get_cached_metrics(c['exp_id'], c['epoch'], roi, r_o)
+        # Consensus score: mean z-score across representative + standalone metrics
+        # For now just collect raw values; we'll z-score after
+        values = {}
+        for name, val, hib in metrics:
+            if name in grouped_names and name not in rep_names:
+                continue
+            values[name] = (val, hib)
+        scored.append({**c, '_values': values})
+
+    # Z-score each voting metric across all candidates, then average
+    voter_names = list(scored[0]['_values'].keys())
+    for vname in voter_names:
+        vals = [s['_values'][vname][0] for s in scored]
+        mean = np.mean(vals)
+        std = np.std(vals)
+        hib = scored[0]['_values'][vname][1]
+        for s in scored:
+            raw = s['_values'][vname][0]
+            z = (raw - mean) / std if std > 1e-10 else 0.0
+            s['_values'][vname] = (z if hib else -z,)  # flip sign for lower-is-better
+
+    # Consensus = mean of z-scores (higher = better)
+    for s in scored:
+        s['score'] = float(np.mean([v[0] for v in s['_values'].values()]))
+        del s['_values']
+
+    # Sort best → worst
+    scored.sort(key=lambda s: s['score'], reverse=True)
+
+    # Cutoff index: keep top (1 - cut_frac), at least 3
+    import math
+    n_keep = max(3, math.ceil(len(scored) * (1 - cut_frac)))
+    cutoff = n_keep
+
+    return jsonify(
+        candidates=[{
+            'exp_id': s['exp_id'],
+            'epoch': s['epoch'],
+            'label': s['label'],
+            'score': round(s['score'], 3),
+        } for s in scored],
+        cutoff=cutoff,
+        total=len(scored),
+    )
+
+
 @app.route('/api/tournament/start', methods=['POST'])
 def start_tournament():
     """Start a tournament with one or more experiments.
@@ -467,6 +614,10 @@ def start_tournament():
     r_o = float(data.get('r_o', 0.5))
     roi = data.get('roi')
     user_name = data.get('user_name', '')
+    # Optional: exclude specific (exp_id, epoch) pairs (from pre-filter)
+    exclude = set()
+    for ex in data.get('exclude', []):
+        exclude.add((ex['exp_id'], ex['epoch']))
 
     if not exps_config:
         return jsonify(error='No experiments specified'), 400
@@ -485,7 +636,7 @@ def start_tournament():
         exp = _ensure_loaded(ec['exp_id'])
         if not exp:
             return jsonify(error=f'Experiment {ec["exp_id"]} not found'), 404
-        short_name = os.path.basename(exp['filename'])
+        exp_label = _format_exp_label(exp['filename'])
         epoch_labels = exp.get('epoch_labels',
                                [f'Ep.{i + 1}' for i in range(exp['num_epochs'])])
         raw_first = exp.get('epoch_config', {}).get('raw_first', False)
@@ -494,10 +645,13 @@ def start_tournament():
             # Skip RAW frame from tournament — it's unprocessed reference, not a candidate
             if raw_first and epoch == 0:
                 continue
+            # Skip pre-filtered candidates
+            if (ec['exp_id'], epoch) in exclude:
+                continue
             candidates.append({
                 'exp_id': ec['exp_id'],
                 'epoch': epoch,
-                'label': f'{short_name} {epoch_label}',
+                'label': f'{exp_label} {epoch_label}',
                 'full_label': f'{exp["filename"]} {epoch_label}',
             })
 
@@ -571,15 +725,27 @@ def tournament_choice(session_id):
             metrics_a = _get_cached_metrics(ca['exp_id'], ca['epoch'], roi, r_o)
             metrics_b = _get_cached_metrics(cb['exp_id'], cb['epoch'], roi, r_o)
 
-            # Z-score normalization: only count votes where |z| > 0.5
+            # Z-score normalization: only count votes where |z| > 0.5.
+            # Each redundancy cluster votes as one unit (via its representative)
+            # to avoid large clusters dominating the tie-break.
             zscored = compute_metric_zscores([metrics_a, metrics_b])
             za, zb = zscored[0], zscored[1]
+
+            # Build set of representatives + standalone metric names
+            rep_names = set()
+            grouped_names = set()
+            for grp in METRIC_GROUPS:
+                rep_names.add(grp['representative'])
+                grouped_names.update(grp['members'])
 
             a_wins = 0
             b_wins = 0
             a_voters = []
             b_voters = []
             for i, ((name, z_a, hib), (_, z_b, _)) in enumerate(zip(za, zb)):
+                # Skip non-representative cluster members
+                if name in grouped_names and name not in rep_names:
+                    continue
                 # Only vote if difference is meaningful (|z| > 0.5)
                 diff = abs(z_a - z_b)
                 if diff < 0.5:
@@ -948,6 +1114,16 @@ def _ensure_loaded(exp_id):
         # Regenerate labels if frame count changed
         if len(exp.get('epoch_labels', [])) != len(frames):
             ec = exp.get('epoch_config', {})
+            # Re-check raw_first auto-detection with actual frame count
+            if (not ec.get('raw_first')
+                    and ec.get('start') is not None
+                    and ec.get('end') is not None):
+                expected = ec['end'] - ec['start'] + 1
+                step = ec.get('step')
+                if step and step > 1:
+                    expected = (ec['end'] - ec['start']) // step + 1
+                if len(frames) == expected + 1:
+                    ec['raw_first'] = True
             exp['epoch_labels'] = generate_epoch_labels(
                 len(frames), ec.get('start'), ec.get('end'),
                 ec.get('step'), ec.get('raw_first', False),
@@ -1039,6 +1215,20 @@ def load_data_dir(data_dir, cli_config=None):
             parsed = parse_epoch_config_from_name(rel_path)
             if parsed:
                 epoch_config = {**parsed, 'source': 'filename'}
+
+        # Auto-detect raw_first: if the filename says start-end (N values)
+        # but the GIF has N+1 frames, the first frame is a RAW reference
+        if (not epoch_config.get('raw_first')
+                and epoch_config.get('start') is not None
+                and epoch_config.get('end') is not None):
+            expected = epoch_config['end'] - epoch_config['start'] + 1
+            step = epoch_config.get('step')
+            if step and step > 1:
+                expected = (epoch_config['end'] - epoch_config['start']) // step + 1
+            if n_frames == expected + 1:
+                epoch_config['raw_first'] = True
+                print(f'  Auto-detected raw_first for {rel_path} '
+                      f'({n_frames} frames, range {epoch_config["start"]}-{epoch_config["end"]})')
 
         labels = generate_epoch_labels(
             n_frames,

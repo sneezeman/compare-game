@@ -412,6 +412,37 @@ METRICS = [
 # Metrics that take r_o parameter
 _RO_METRICS = {dcts, ndctbe, hf_energy_ratio, spectral_flatness}
 
+# Redundancy clusters: metrics with Pearson |r| > 0.95 across 62 tournaments.
+# Within each group, one representative is shown by default; the rest are
+# hidden behind a toggle to reduce cognitive load.
+METRIC_GROUPS = [
+    {
+        'name': 'Edge Sharpness',
+        'representative': 'Tenengrad',
+        'members': ['Brenner', 'Tenengrad', 'Laplacian Var', 'SML', 'Vollath F4'],
+    },
+    {
+        'name': 'DCT Entropy',
+        'representative': 'DCTS',
+        'members': ['DCTS', 'NDCTBE'],
+    },
+    {
+        'name': 'Spectral HF',
+        'representative': 'HF Energy',
+        'members': ['HF Energy', 'Spec. Struct.'],
+    },
+    {
+        'name': 'Local Detail',
+        'representative': 'Local Std',
+        'members': ['LoG Response', 'Local Std'],
+    },
+    {
+        'name': 'Intensity Spread',
+        'representative': 'Norm. Var.',
+        'members': ['Norm. Var.', 'Vollath F5'],
+    },
+]
+
 
 def compute_all(img, r_o=0.5):
     """Compute all metrics on a grayscale image (values in [0, 1]).
