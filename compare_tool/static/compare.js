@@ -51,6 +51,35 @@ function formatDirName(dirPath) {
     return escapeHtml(dirPath);
 }
 
+function shortExpLabel(filename) {
+    // Extract a readable tile label from a full path like
+    // 'ls3639/NM0029/finetune/NM0029_HT_100nm_T008_0001_rec__from_..._T000_0001_rec__140/all_epochs_view1_141-150.gif'
+    // -> 'T008←T000@140 view1'
+    const parts = filename.replace(/\\/g, '/').split('/');
+    const gifName = parts[parts.length - 1] || filename;
+    const dirName = parts.length >= 2 ? parts[parts.length - 2] : '';
+
+    const vm = gifName.match(/view(\d+)/);
+    const view = vm ? ` view${vm[1]}` : '';
+
+    const ft = dirName.match(/_?(T\d+)_\d+_rec__from_\w+_(T\d+)_\d+_rec__(\d+)/);
+    if (ft) return `${ft[1]}←${ft[2]}@${ft[3]}${view}`;
+
+    const tr = dirName.match(/_?(T\d+)_\d+_rec_?$/);
+    if (tr) return `${tr[1]}${view}`;
+
+    return gifName;
+}
+
+function formatIsoDate(iso) {
+    // Turn '2026-04-14T18:58:41.123' into '2026/04/14 18:58'
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function metricColor(t) {
     // t in [0, 1]: 0 = worst (red), 1 = best (green)
     t = Math.max(0, Math.min(1, t));
@@ -197,6 +226,8 @@ function togglePastResults() {
     if (list.style.display === 'none') {
         list.style.display = 'block';
         toggle.innerHTML = '&#9660;';
+        // Refresh on expand — results may have changed since page load
+        loadPastResults();
     } else {
         list.style.display = 'none';
         toggle.innerHTML = '&#9654;';
@@ -249,8 +280,9 @@ async function loadPastResults() {
         data.results.forEach(r => {
             const div = document.createElement('div');
             div.className = 'past-result-item';
-            const dateStr = r.date ? new Date(r.date).toLocaleString() : r.filename;
-            const gifsStr = r.gifs.map(g => g.split('/').pop()).join(', ');
+            const dateStr = r.date ? formatIsoDate(r.date) : r.filename;
+            // Pull tile info (e.g. T008←T000@140) from each GIF path
+            const gifsStr = r.gifs.map(g => shortExpLabel(g)).filter((v, i, a) => a.indexOf(v) === i).join(', ');
             div.innerHTML = `
                 <div class="past-result-info">
                     <span class="past-result-date">${escapeHtml(dateStr)}</span>
@@ -646,15 +678,17 @@ function applyROISuggestion(x, y, w, h) {
 // Phase 2.5: Pre-filter
 // =========================================================================
 
-let prefilterCandidates = [];  // sorted by score
-let prefilterCutoff = 0;
+let prefilterCandidates = [];  // sorted by score (best first)
+let pfIdxLeft = 0;   // index into full list (left viewer)
+let pfIdxRight = 0;  // index into full list (right viewer)
+let pfImgSize = 500;
 
 async function showPrefilter() {
     showPhase('prefilter');
-    const keepGrid = document.getElementById('pf-keep-grid');
-    const cutGrid = document.getElementById('pf-cut-grid');
-    keepGrid.innerHTML = '<p style="color:#888">Computing metrics for all candidates...</p>';
-    cutGrid.innerHTML = '';
+    document.getElementById('pf-img-left').src = '';
+    document.getElementById('pf-img-right').src = '';
+    document.getElementById('pf-label-left').textContent = 'Computing metrics...';
+    document.getElementById('pf-label-right').textContent = '';
 
     try {
         const expsConfig = state.selected.map(s => ({ exp_id: s.expId }));
@@ -665,71 +699,80 @@ async function showPrefilter() {
         });
         const data = await resp.json();
         if (!resp.ok || data.error) {
-            keepGrid.innerHTML = `<p style="color:#e94560">Error: ${data.error || resp.status}. Use "Skip" to proceed.</p>`;
+            document.getElementById('pf-label-left').innerHTML =
+                `<span style="color:#e94560">Error: ${data.error || resp.status}. Use "Skip" to proceed.</span>`;
             return;
         }
 
         prefilterCandidates = data.candidates;
-        prefilterCutoff = data.cutoff;
+        // No pre-filled exclusions — user decides
+        prefilterCandidates.forEach(c => { c._excluded = false; });
 
-        // Mark candidates above/below cutoff
-        prefilterCandidates.forEach((c, i) => { c._excluded = i >= prefilterCutoff; });
-
-        renderPrefilterGrid();
+        pfIdxLeft = 0;
+        pfIdxRight = prefilterCandidates.length - 1;  // start at worst
+        renderPrefilterViewer();
     } catch (e) {
-        keepGrid.innerHTML = `<p style="color:#e94560">Failed: ${e.message}. Use "Skip" to proceed.</p>`;
+        document.getElementById('pf-label-left').innerHTML =
+            `<span style="color:#e94560">Failed: ${e.message}. Use "Skip".</span>`;
     }
 }
 
-let pfCardSize = 200;
-
-function renderPrefilterGrid() {
-    const keepGrid = document.getElementById('pf-keep-grid');
-    const cutGrid = document.getElementById('pf-cut-grid');
+function pfRenderSide(side, idx) {
+    const n = prefilterCandidates.length;
+    if (n === 0) return;
+    const c = prefilterCandidates[idx];
     const roiParam = state.roi ? `&roi=${state.roi}` : '';
-    keepGrid.innerHTML = '';
-    cutGrid.innerHTML = '';
 
-    prefilterCandidates.forEach((c, i) => {
-        const card = document.createElement('div');
-        card.className = 'prefilter-card' + (c._excluded ? ' pf-excluded' : '');
-        card.style.width = pfCardSize + 'px';
-        card.onclick = () => {
-            c._excluded = !c._excluded;
-            renderPrefilterGrid();
-        };
+    document.getElementById(`pf-img-${side}`).src =
+        `/api/frame/${c.exp_id}/${c.epoch}?w=${pfImgSize}${roiParam}`;
+    document.getElementById(`pf-label-${side}`).innerHTML =
+        `<strong>${escapeHtml(c.label)}</strong> <span class="pf-score">#${idx + 1} / ${n} &bull; score: ${c.score.toFixed(2)}</span>`;
+    document.getElementById(`pf-pos-${side}`).textContent = `${idx + 1} / ${n}`;
 
-        const thumbUrl = `/api/frame/${c.exp_id}/${c.epoch}?w=${pfCardSize}${roiParam}`;
-        card.innerHTML = `
-            <span class="pf-rank">#${i + 1}</span>
-            <img src="${thumbUrl}" alt="${escapeHtml(c.label)}" loading="lazy">
-            <div class="pf-label">${escapeHtml(c.label)}<br><span style="font-size:0.85em;color:#666">score: ${c.score.toFixed(2)}</span></div>
-        `;
+    // Highlight border if excluded
+    const wrap = document.getElementById(`pf-img-${side}`).parentElement;
+    wrap.classList.toggle('pf-excluded-img', !!c._excluded);
+}
 
-        if (c._excluded) {
-            cutGrid.appendChild(card);
-        } else {
-            keepGrid.appendChild(card);
-        }
-    });
+function renderPrefilterViewer() {
+    pfRenderSide('left', pfIdxLeft);
+    pfRenderSide('right', pfIdxRight);
+
+    // Sync checkbox with right side's candidate
+    const cb = document.getElementById('pf-exclude-cb');
+    cb.checked = prefilterCandidates[pfIdxRight]._excluded;
 
     updatePrefilterCount();
 }
 
+function pfNav(side, delta) {
+    const n = prefilterCandidates.length;
+    if (side === 'left') {
+        pfIdxLeft = Math.max(0, Math.min(n - 1, pfIdxLeft + delta));
+    } else {
+        pfIdxRight = Math.max(0, Math.min(n - 1, pfIdxRight + delta));
+    }
+    renderPrefilterViewer();
+}
+
+function pfExcludeToggle() {
+    const cb = document.getElementById('pf-exclude-cb');
+    prefilterCandidates[pfIdxRight]._excluded = cb.checked;
+    renderPrefilterViewer();
+}
+
 function resizePrefilter(val) {
-    pfCardSize = parseInt(val);
+    pfImgSize = parseInt(val);
     document.getElementById('pf-size-label').textContent = val + 'px';
-    document.querySelectorAll('.prefilter-card').forEach(card => {
-        card.style.width = val + 'px';
-    });
+    renderPrefilterViewer();
 }
 
 function updatePrefilterCount() {
-    const kept = prefilterCandidates.filter(c => !c._excluded).length;
     const cut = prefilterCandidates.filter(c => c._excluded).length;
+    const kept = prefilterCandidates.length - cut;
     document.getElementById('prefilter-keep-count').textContent = kept;
-    document.getElementById('pf-keep-n').textContent = kept;
     document.getElementById('pf-cut-n').textContent = cut;
+    document.getElementById('pf-total-n').textContent = prefilterCandidates.length;
 }
 
 function skipPrefilter() {

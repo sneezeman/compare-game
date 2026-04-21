@@ -21,7 +21,7 @@ from PIL import Image
 
 from gif_loader import (compute_variability_map, extract_frames,
                         suggest_rois, variability_to_heatmap_rgba)
-from metrics import compute_all, compute_metric_zscores, METRIC_GROUPS
+from metrics import compute_all, compute_metric_zscores, METRIC_GROUPS, ELIMINATION_METRICS
 from tournament import Tournament
 
 app = Flask(__name__)
@@ -547,41 +547,31 @@ def prefilter():
     if len(candidates) < 4:
         return jsonify(error='Too few candidates for pre-filtering'), 400
 
-    # Compute metrics for each candidate
-    # Build set of representative metric names for consensus scoring
-    rep_names = set()
-    grouped_names = set()
-    for grp in METRIC_GROUPS:
-        rep_names.add(grp['representative'])
-        grouped_names.update(grp['members'])
-
+    # Compute metrics for each candidate using elimination-proven metrics only.
+    # ELIMINATION_METRICS maps metric name -> weight (negative = inverted).
     scored = []
     for c in candidates:
         metrics = _get_cached_metrics(c['exp_id'], c['epoch'], roi, r_o)
-        # Consensus score: mean z-score across representative + standalone metrics
-        # For now just collect raw values; we'll z-score after
         values = {}
         for name, val, hib in metrics:
-            if name in grouped_names and name not in rep_names:
-                continue
-            values[name] = (val, hib)
+            if name in ELIMINATION_METRICS:
+                values[name] = val
         scored.append({**c, '_values': values})
 
-    # Z-score each voting metric across all candidates, then average
-    voter_names = list(scored[0]['_values'].keys())
-    for vname in voter_names:
-        vals = [s['_values'][vname][0] for s in scored]
+    # Z-score each metric across all candidates, then weighted average
+    for mname, weight in ELIMINATION_METRICS.items():
+        vals = [s['_values'].get(mname, 0) for s in scored]
         mean = np.mean(vals)
         std = np.std(vals)
-        hib = scored[0]['_values'][vname][1]
         for s in scored:
-            raw = s['_values'][vname][0]
+            raw = s['_values'].get(mname, 0)
             z = (raw - mean) / std if std > 1e-10 else 0.0
-            s['_values'][vname] = (z if hib else -z,)  # flip sign for lower-is-better
+            # weight sign handles inversion (Spec. Struct. has weight -1)
+            s['_values'][mname] = z * weight
 
-    # Consensus = mean of z-scores (higher = better)
+    # Consensus = weighted mean of z-scores (higher = better)
     for s in scored:
-        s['score'] = float(np.mean([v[0] for v in s['_values'].values()]))
+        s['score'] = float(np.mean(list(s['_values'].values())))
         del s['_values']
 
     # Sort best → worst

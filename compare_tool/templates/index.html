@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Compare Game - Epoch Comparison Tool</title>
-    <link rel="stylesheet" href="/static/style.css?v=16">
+    <link rel="stylesheet" href="/static/style.css?v=19">
 </head>
 <body>
     <h1>Compare Game</h1>
@@ -89,24 +89,46 @@
     <div id="phase-prefilter" class="phase">
         <h3 class="center-row">Pre-filter by Metrics</h3>
         <p class="center-row" style="color: #888; margin-bottom: 4px;">
-            Candidates sorted by metric consensus. Click any thumbnail to move it between columns.
+            Candidates ranked by elimination metrics (best on the left, worst on the right). Mark bad ones for removal.
         </p>
         <div class="size-slider-row">
-            <label>Image size: <input type="range" id="pf-size-slider" min="100" max="500" value="200" step="20"
+            <label>Image size: <input type="range" id="pf-size-slider" min="200" max="1200" value="500" step="50"
                 oninput="resizePrefilter(this.value)"></label>
-            <span id="pf-size-label">200px</span>
+            <span id="pf-size-label">500px</span>
         </div>
-        <div class="prefilter-columns">
-            <div class="pf-col">
-                <div class="pf-col-header pf-col-keep">Keeping <span id="pf-keep-n">0</span></div>
-                <div id="pf-keep-grid" class="prefilter-grid"></div>
+        <div class="pf-viewer">
+            <div class="pf-side">
+                <div class="pf-img-wrap">
+                    <img id="pf-img-left" class="pf-img" alt="Candidate">
+                </div>
+                <div class="pf-nav">
+                    <button class="btn btn-secondary pf-nav-btn" onclick="pfNav('left', -1)">&larr;</button>
+                    <span id="pf-pos-left" class="pf-pos">1 / 10</span>
+                    <button class="btn btn-secondary pf-nav-btn" onclick="pfNav('left', 1)">&rarr;</button>
+                </div>
+                <div id="pf-label-left" class="pf-card-label"></div>
             </div>
-            <div class="pf-col">
-                <div class="pf-col-header pf-col-cut">Removing <span id="pf-cut-n">0</span></div>
-                <div id="pf-cut-grid" class="prefilter-grid"></div>
+            <div class="pf-side">
+                <div class="pf-img-wrap">
+                    <img id="pf-img-right" class="pf-img" alt="Candidate">
+                </div>
+                <div class="pf-nav">
+                    <button class="btn btn-secondary pf-nav-btn" onclick="pfNav('right', -1)">&larr;</button>
+                    <span id="pf-pos-right" class="pf-pos">10 / 10</span>
+                    <button class="btn btn-secondary pf-nav-btn" onclick="pfNav('right', 1)">&rarr;</button>
+                </div>
+                <div id="pf-label-right" class="pf-card-label"></div>
+                <label class="pf-exclude-label">
+                    <input type="checkbox" id="pf-exclude-cb" onchange="pfExcludeToggle()">
+                    Remove this candidate
+                </label>
             </div>
         </div>
-        <div class="center-row" style="margin-top: 16px; gap: 12px;">
+        <div class="center-row" style="margin-top: 16px;">
+            <span style="color:#e94560; font-weight:600;">Removing <span id="pf-cut-n">0</span></span>
+            <span style="color:#888;"> of <span id="pf-total-n">0</span></span>
+        </div>
+        <div class="center-row" style="margin-top: 8px; gap: 12px;">
             <button class="btn" onclick="applyPrefilter()">
                 Start Comparison (<span id="prefilter-keep-count">0</span> candidates)
             </button>
@@ -166,6 +188,6 @@
         </div>
     </div>
 
-    <script src="/static/compare.js?v=16"></script>
+    <script src="/static/compare.js?v=19"></script>
 </body>
 </html>

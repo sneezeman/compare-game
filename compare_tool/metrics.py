@@ -412,6 +412,17 @@ METRICS = [
 # Metrics that take r_o parameter
 _RO_METRICS = {dcts, ndctbe, hf_energy_ratio, spectral_flatness}
 
+# Metrics proven best for eliminating the worst candidates (safe elimination
+# rate >= 94% at 25% cut, from 62-tournament analysis). Used for pre-filter
+# scoring. Weights reflect elimination reliability.
+ELIMINATION_METRICS = {
+    'Tenengrad': 1.0,       # 96% safe, rep for Edge Sharpness cluster
+    'HF Energy': 1.0,       # 96% safe, rep for Spectral HF cluster
+    'Local Std': 1.0,       # 96% safe, rep for Local Detail cluster
+    'Wavelet E.R.': 1.0,    # 94% safe, standalone
+    'Spec. Struct.': -1.0,  # 100% safe but INVERTED (lower = better)
+}
+
 # Redundancy clusters: metrics with Pearson |r| > 0.95 across 62 tournaments.
 # Within each group, one representative is shown by default; the rest are
 # hidden behind a toggle to reduce cognitive load.
