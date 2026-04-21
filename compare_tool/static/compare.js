@@ -36,13 +36,13 @@ function formatDirName(dirPath) {
     // Finetuning:    YY031A_HT_100nm_T001_0001_rec__from_YY031A_HT_100nm_T000_0001_rec__140
     const name = dirPath.split('/').pop() || dirPath;
 
-    const ftMatch = name.match(/(.+?)_(T\d+)_(\d+)_rec__from_(.+?)_(T\d+)_(\d+)_rec__(\d+)/);
+    const ftMatch = name.match(/(.+?)_(T\d+)(?:_\d+)?_rec__from_(.+?)_(T\d+)(?:_\d+)?_rec__(\d+)/);
     if (ftMatch) {
-        const [, sample, tomo, , , srcTomo, , srcEpoch] = ftMatch;
+        const [, sample, tomo, srcTomo, , srcEpoch] = ftMatch;
         return `<span class="dir-tomo">${escapeHtml(tomo)}</span> <span class="dir-arrow">\u2190</span> <span class="dir-src">${escapeHtml(srcTomo)}@${escapeHtml(srcEpoch)}</span> <span class="dir-sample">${escapeHtml(sample)}</span>`;
     }
 
-    const trainMatch = name.match(/(.+?)_(T\d+)_(\d+)_rec_?$/);
+    const trainMatch = name.match(/(.+?)_(T\d+)(?:_\d+)?_rec_?$/);
     if (trainMatch) {
         const [, sample, tomo] = trainMatch;
         return `<span class="dir-tomo">${escapeHtml(tomo)}</span> <span class="dir-type">training</span> <span class="dir-sample">${escapeHtml(sample)}</span>`;
@@ -62,10 +62,10 @@ function shortExpLabel(filename) {
     const vm = gifName.match(/view(\d+)/);
     const view = vm ? ` view${vm[1]}` : '';
 
-    const ft = dirName.match(/_?(T\d+)_\d+_rec__from_\w+_(T\d+)_\d+_rec__(\d+)/);
+    const ft = dirName.match(/_?(T\d+)(?:_\d+)?_rec__from_.+?_(T\d+)(?:_\d+)?_rec__(\d+)/);
     if (ft) return `${ft[1]}←${ft[2]}@${ft[3]}${view}`;
 
-    const tr = dirName.match(/_?(T\d+)_\d+_rec_?$/);
+    const tr = dirName.match(/_?(T\d+)(?:_\d+)?_rec_?$/);
     if (tr) return `${tr[1]}${view}`;
 
     return gifName;

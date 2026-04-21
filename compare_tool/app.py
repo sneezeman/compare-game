@@ -154,12 +154,12 @@ def _format_exp_label(filename):
         view = f' view{vm.group(1)}'
 
     # Finetuning: ..._T001_0001_rec__from_..._T000_0001_rec__155
-    ft = re.search(r'_?(T\d+)_\d+_rec__from_\w+_(T\d+)_\d+_rec__(\d+)', dir_name)
+    ft = re.search(r'_?(T\d+)(?:_\d+)?_rec__from_.+?_(T\d+)(?:_\d+)?_rec__(\d+)', dir_name)
     if ft:
         return f'{ft.group(1)}\u2190{ft.group(2)}@{ft.group(3)}{view}'
 
     # Training tile: ..._T000_0001_rec_
-    tr = re.search(r'_?(T\d+)_\d+_rec_?$', dir_name)
+    tr = re.search(r'_?(T\d+)(?:_\d+)?_rec_?$', dir_name)
     if tr:
         return f'{tr.group(1)}{view}'
 
@@ -300,9 +300,22 @@ def health():
                    loaded=sum(1 for e in experiments.values() if 'frames' in e))
 
 
+@app.template_global('asset_version')
+def _asset_version(filename):
+    """Return an mtime-based cache-bust token for a static file."""
+    try:
+        path = os.path.join(app.static_folder, filename)
+        return str(int(os.path.getmtime(path)))
+    except OSError:
+        return '0'
+
+
 @app.route('/')
 def index():
-    return render_template('index.html')
+    resp = app.make_response(render_template('index.html'))
+    # Force the HTML to always re-validate so new ?v=... tokens are picked up
+    resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
+    return resp
 
 
 @app.route('/api/experiments')
