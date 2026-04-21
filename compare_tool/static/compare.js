@@ -38,7 +38,7 @@ function formatDirName(dirPath) {
 
     const ftMatch = name.match(/(.+?)_(T\d+)(?:_\d+)?_rec__from_(.+?)_(T\d+)(?:_\d+)?_rec__(\d+)/);
     if (ftMatch) {
-        const [, sample, tomo, srcTomo, , srcEpoch] = ftMatch;
+        const [, sample, tomo, , srcTomo, srcEpoch] = ftMatch;
         return `<span class="dir-tomo">${escapeHtml(tomo)}</span> <span class="dir-arrow">\u2190</span> <span class="dir-src">${escapeHtml(srcTomo)}@${escapeHtml(srcEpoch)}</span> <span class="dir-sample">${escapeHtml(sample)}</span>`;
     }
 
@@ -735,6 +735,10 @@ function pfRenderSide(side, idx) {
 }
 
 function renderPrefilterViewer() {
+    // Apply container size (so the slider actually affects display size)
+    document.querySelectorAll('.pf-img-wrap').forEach(wrap => {
+        wrap.style.width = pfImgSize + 'px';
+    });
     pfRenderSide('left', pfIdxLeft);
     pfRenderSide('right', pfIdxRight);
 
@@ -764,8 +768,51 @@ function pfExcludeToggle() {
 function resizePrefilter(val) {
     pfImgSize = parseInt(val);
     document.getElementById('pf-size-label').textContent = val + 'px';
+    // Resize the on-screen containers so the slider actually changes the displayed size
+    document.querySelectorAll('.pf-img-wrap').forEach(wrap => {
+        wrap.style.width = pfImgSize + 'px';
+    });
     renderPrefilterViewer();
 }
+
+// Spacebar swap: while held, visually swap the left/right images so the user
+// can spot subtle differences by flicking between them.
+let pfSpaceHeld = false;
+function pfSwapImages(swap) {
+    const left = document.getElementById('pf-img-left');
+    const right = document.getElementById('pf-img-right');
+    if (!left || !right) return;
+    if (swap) {
+        const tmp = left.src;
+        left.src = right.src;
+        right.src = tmp;
+    } else {
+        // Restore: re-render to pull the correct URLs from state
+        renderPrefilterViewer();
+    }
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space') return;
+    const phase = document.getElementById('phase-prefilter');
+    if (!phase || !phase.classList.contains('active')) return;
+    // Ignore when focus is in a form field
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') return;
+    e.preventDefault();
+    if (!pfSpaceHeld) {
+        pfSpaceHeld = true;
+        pfSwapImages(true);
+    }
+});
+
+document.addEventListener('keyup', (e) => {
+    if (e.code !== 'Space') return;
+    if (pfSpaceHeld) {
+        pfSpaceHeld = false;
+        pfSwapImages(false);
+    }
+});
 
 function updatePrefilterCount() {
     const cut = prefilterCandidates.filter(c => c._excluded).length;

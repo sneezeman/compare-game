@@ -544,6 +544,7 @@ def prefilter():
         exp = _ensure_loaded(ec['exp_id'])
         if not exp:
             return jsonify(error=f'Experiment {ec["exp_id"]} not found'), 404
+        exp_label = _format_exp_label(exp['filename'])
         epoch_labels = exp.get('epoch_labels',
                                [f'Ep.{i + 1}' for i in range(exp['num_epochs'])])
         raw_first = exp.get('epoch_config', {}).get('raw_first', False)
@@ -554,7 +555,7 @@ def prefilter():
             candidates.append({
                 'exp_id': ec['exp_id'],
                 'epoch': epoch,
-                'label': epoch_label,
+                'label': f'{exp_label} {epoch_label}',
             })
 
     if len(candidates) < 4:
@@ -1176,6 +1177,10 @@ def scan_past_results():
             past_results.append(info)
         except Exception:
             continue
+
+    # Sort by date descending (newest first) — falls back to filename for
+    # entries without a parseable date
+    past_results.sort(key=lambda r: r.get('date') or r.get('filename', ''), reverse=True)
 
     print(f'  Found {len(past_results)} past result(s)')
 
