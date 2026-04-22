@@ -7,6 +7,7 @@ import hmac
 import io
 import json
 import os
+import queue
 import re
 import threading
 import time
@@ -680,6 +681,146 @@ def prefilter():
         total=len(scored),
         has_roi=bool(roi),
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-view background computation
+# ---------------------------------------------------------------------------
+# While the user is busy with the tournament, compute elimination metrics on
+# the sibling views (e.g. view0 and view2 when they're comparing view1) using
+# whole-frame (no ROI). A single daemon thread processes jobs serially to
+# avoid CPU contention during the tournament.
+
+_cross_view_queue = queue.Queue()
+_cross_view_jobs = {}  # job_id -> dict
+
+
+def _find_sibling_exp_id(exp_id, target_view):
+    """Given an experiment, find the exp_id of the same GIF but with a
+    different view (e.g. 'view0' instead of 'view1'). Returns None if not found."""
+    exp = experiments.get(exp_id)
+    if not exp:
+        return None
+    name = exp['filename']
+    m = re.search(r'view([012])', name)
+    if not m or m.group(1) == target_view[-1]:
+        return exp_id if m and m.group(1) == target_view[-1] else None
+    sibling_name = re.sub(r'view[012]', target_view, name, count=1)
+    for other_id, other_exp in experiments.items():
+        if other_exp['filename'] == sibling_name:
+            return other_id
+    return None
+
+
+def _cross_view_worker():
+    while True:
+        job = _cross_view_queue.get()
+        job_id = job['job_id']
+        state = _cross_view_jobs.get(job_id)
+        if not state:
+            continue
+        try:
+            state['status'] = 'running'
+            candidates = job['candidates']
+            r_o = job['r_o']
+
+            # Find which views are available for these candidates
+            views_present = set()
+            per_view_exp = {}  # (view, candidate_idx) -> exp_id
+            for i, c in enumerate(candidates):
+                for v in ('view0', 'view1', 'view2'):
+                    sib = _find_sibling_exp_id(c['exp_id'], v)
+                    if sib:
+                        views_present.add(v)
+                        per_view_exp[(v, i)] = sib
+
+            if not views_present:
+                state['status'] = 'missing'
+                continue
+
+            views = sorted(views_present)
+            total = len(views) * len(candidates)
+            state['progress'] = {'done': 0, 'total': total}
+
+            # Collect raw elimination-metric values per view
+            raw_by_view = {v: [] for v in views}
+            for v in views:
+                for i, c in enumerate(candidates):
+                    sib = per_view_exp.get((v, i))
+                    if sib is None:
+                        raw_by_view[v].append({})
+                    else:
+                        try:
+                            metrics = _get_cached_metrics(sib, c['epoch'], None, r_o)
+                            raw_by_view[v].append({name: val for name, val, _ in metrics
+                                                   if name in ELIMINATION_METRICS})
+                        except Exception:
+                            raw_by_view[v].append({})
+                    state['progress']['done'] += 1
+
+            # Compute z-score consensus per view
+            results = {}
+            for v in views:
+                raw = raw_by_view[v]
+                zsum = [0.0] * len(candidates)
+                zcount = [0] * len(candidates)
+                for mname, weight in ELIMINATION_METRICS.items():
+                    vals = [r.get(mname, 0) for r in raw]
+                    mean = float(np.mean(vals))
+                    std = float(np.std(vals))
+                    for i, val in enumerate(vals):
+                        z = (val - mean) / std if std > 1e-10 else 0.0
+                        zsum[i] += z * weight
+                        zcount[i] += 1
+                scores = [zsum[i] / zcount[i] if zcount[i] else 0.0
+                          for i in range(len(candidates))]
+                ranked = sorted(
+                    [{'exp_id': candidates[i]['exp_id'],
+                      'epoch': candidates[i]['epoch'],
+                      'label': candidates[i].get('label', ''),
+                      'score': round(scores[i], 3)}
+                     for i in range(len(candidates))],
+                    key=lambda x: x['score'], reverse=True,
+                )
+                results[v] = ranked
+
+            state['views'] = results
+            state['status'] = 'done'
+        except Exception as e:
+            state['status'] = 'error'
+            state['error'] = str(e)
+
+
+_cross_view_thread = threading.Thread(target=_cross_view_worker, daemon=True)
+_cross_view_thread.start()
+
+
+@app.route('/api/cross-view/start', methods=['POST'])
+def cross_view_start():
+    """Kick off background computation of sibling-view metrics.
+    Body: {candidates: [{exp_id, epoch, label}, ...], r_o: 0.5}"""
+    data = request.get_json(force=True) if request.data else {}
+    candidates = data.get('candidates', [])
+    r_o = float(data.get('r_o', 0.5))
+    if not candidates:
+        return jsonify(error='No candidates'), 400
+
+    job_id = str(uuid.uuid4())[:8]
+    _cross_view_jobs[job_id] = {
+        'status': 'pending',
+        'progress': {'done': 0, 'total': 0},
+        'views': {},
+    }
+    _cross_view_queue.put({'job_id': job_id, 'candidates': candidates, 'r_o': r_o})
+    return jsonify(job_id=job_id)
+
+
+@app.route('/api/cross-view/status/<job_id>')
+def cross_view_status(job_id):
+    state = _cross_view_jobs.get(job_id)
+    if not state:
+        return jsonify(error='Unknown job'), 404
+    return jsonify(**state)
 
 
 @app.route('/api/tournament/start', methods=['POST'])

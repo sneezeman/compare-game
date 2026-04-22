@@ -20,6 +20,8 @@ const state = {
     spaceCount: 0,
     spaceTimer: null,
     submitting: false,
+    // Cross-view background computation job id
+    crossViewJobId: null,
     // Internal
     _roiMouseDown: null,
     _roiMouseMove: null,
@@ -682,7 +684,7 @@ let prefilterCandidates = [];  // sorted by current mode (best first)
 let pfIdxLeft = 0;   // index into full list (left viewer)
 let pfIdxRight = 0;  // index into full list (right viewer)
 let pfImgSize = 500;
-let pfSortMode = 'roi';  // 'roi' or 'full'
+let pfSortMode = 'full';  // 'roi' or 'full' (full = whole image, more consistent)
 let pfHasRoi = false;
 
 async function showPrefilter() {
@@ -786,17 +788,22 @@ async function showPrefilter() {
             score_full: scoresFull[i],
             _excluded: false,
         }));
-        prefilterCandidates.sort((a, b) => b.score - a.score);
+        // Default: sort by full-image score (more consistent than ROI-only)
+        prefilterCandidates.sort((a, b) => b.score_full - a.score_full);
 
         // Hide the ROI/full toggle if no ROI is set
         const sortRow = document.getElementById('pf-sort-row');
         if (sortRow) sortRow.style.display = pfHasRoi ? '' : 'none';
 
         progress.style.display = 'none';
-        pfSortMode = 'roi';
+        pfSortMode = 'full';
         pfIdxLeft = 0;
         pfIdxRight = prefilterCandidates.length - 1;
         renderPrefilterViewer();
+
+        // Kick off cross-view computation in the background — by the time the
+        // user finishes the tournament, the sibling-view metrics should be ready
+        startCrossViewBackground(candidates);
     } catch (e) {
         progress.style.display = 'none';
         document.getElementById('pf-label-left').innerHTML =
@@ -841,6 +848,129 @@ function pfSetSortMode(mode) {
     pfIdxLeft = 0;
     pfIdxRight = prefilterCandidates.length - 1;
     renderPrefilterViewer();
+}
+
+// Fire-and-forget: start the cross-view background job
+async function startCrossViewBackground(candidates) {
+    try {
+        const resp = await fetch('/api/cross-view/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ candidates, r_o: state.rO }),
+        });
+        const data = await resp.json();
+        if (data.job_id) {
+            state.crossViewJobId = data.job_id;
+        }
+    } catch (e) {
+        // non-fatal — cross-view is a bonus feature
+        console.warn('cross-view start failed', e);
+    }
+}
+
+async function pollCrossView(jobId, top3, ranking) {
+    const section = document.getElementById('cross-view-section');
+    const statusEl = document.getElementById('cross-view-status');
+    const content = document.getElementById('cross-view-content');
+    section.style.display = 'block';
+    content.innerHTML = '';
+
+    const maxTries = 600;  // ~20 min at 2s intervals
+    for (let attempt = 0; attempt < maxTries; attempt++) {
+        try {
+            const resp = await fetch(`/api/cross-view/status/${jobId}`);
+            if (!resp.ok) {
+                section.style.display = 'none';
+                return;
+            }
+            const data = await resp.json();
+            if (data.status === 'missing') {
+                section.style.display = 'none';  // no sibling views available
+                return;
+            }
+            if (data.status === 'error') {
+                statusEl.textContent = `Cross-view failed: ${data.error || 'unknown error'}`;
+                return;
+            }
+            if (data.status === 'done') {
+                renderCrossView(data.views, top3, ranking);
+                return;
+            }
+            // still running
+            const p = data.progress || {};
+            const total = p.total || 0;
+            const done = p.done || 0;
+            statusEl.textContent = total
+                ? `Computing sibling-view metrics: ${done} / ${total}…`
+                : 'Queued…';
+        } catch (e) {
+            // keep trying
+        }
+        await new Promise(r => setTimeout(r, 2000));
+    }
+    statusEl.textContent = 'Cross-view check timed out.';
+}
+
+function renderCrossView(views, top3, ranking) {
+    const statusEl = document.getElementById('cross-view-status');
+    const content = document.getElementById('cross-view-content');
+
+    const viewNames = Object.keys(views).sort();
+    if (viewNames.length === 0) {
+        document.getElementById('cross-view-section').style.display = 'none';
+        return;
+    }
+
+    // Determine which view the user actually compared — pick the view that
+    // appears in the current ranking's experiment filename
+    let activeView = null;
+    for (const c of ranking) {
+        const m = (c.full_label || '').match(/view([012])/);
+        if (m) { activeView = `view${m[1]}`; break; }
+    }
+
+    // Build a lookup: view -> { "exp_id|epoch" -> rank }
+    const lookup = {};
+    for (const v of viewNames) {
+        lookup[v] = {};
+        views[v].forEach((c, idx) => {
+            lookup[v][`${c.exp_id}|${c.epoch}`] = idx + 1;
+        });
+    }
+
+    const top3Keys = top3.map(c => `${c.exp_id}|${c.epoch}`);
+
+    // Build the table
+    let html = '<table class="cv-table"><thead><tr><th>Your pick</th>';
+    for (const v of viewNames) {
+        const lbl = v === activeView ? `${v} (compared)` : v;
+        html += `<th class="${v === activeView ? 'cv-active-view' : ''}">${escapeHtml(lbl)} rank</th>`;
+    }
+    html += '</tr></thead><tbody>';
+
+    top3.forEach((c, i) => {
+        const key = `${c.exp_id}|${c.epoch}`;
+        html += `<tr><td>${i + 1}. ${escapeHtml(c.label)}</td>`;
+        for (const v of viewNames) {
+            const rank = lookup[v][key];
+            const klass = (rank && rank <= 3) ? 'cv-match' : 'cv-miss';
+            const activeClass = v === activeView ? ' cv-active-view' : '';
+            html += `<td class="${klass}${activeClass}">${rank != null ? rank : '—'}</td>`;
+        }
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+
+    // Summary: how many of your top-3 fall in the metric top-3 per view
+    const summaries = [];
+    for (const v of viewNames) {
+        const overlap = top3Keys.filter(k => (lookup[v][k] || 99) <= 3).length;
+        summaries.push(`<strong>${v}</strong>: ${overlap}/3`);
+    }
+    html += `<div class="cv-summary">Your top-3 present in each view's metric top-3: ${summaries.join(' &nbsp;&bull;&nbsp; ')}</div>`;
+
+    statusEl.textContent = 'Computed on whole-frame (no ROI) for each sibling view.';
+    content.innerHTML = html;
 }
 
 function renderPrefilterViewer() {
@@ -1315,6 +1445,11 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
         div.className = 'podium-item';
         div.innerHTML = `<div class="rank">${medals[i]}</div><div class="epoch-num">${escapeHtml(top3[i].label)}</div>`;
         podium.appendChild(div);
+    }
+
+    // Start polling the cross-view job (if one exists)
+    if (state.crossViewJobId) {
+        pollCrossView(state.crossViewJobId, top3, ranking);
     }
 
     // Use server-provided metrics or fetch them

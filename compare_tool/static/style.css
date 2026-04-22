@@ -286,6 +286,48 @@ h1 {
     accent-color: #e94560;
 }
 
+.cv-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+    margin-top: 8px;
+}
+
+.cv-table th, .cv-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #333;
+    text-align: center;
+}
+
+.cv-table th {
+    color: #aaa;
+    font-weight: 600;
+}
+
+.cv-table td:first-child,
+.cv-table th:first-child {
+    text-align: left;
+}
+
+.cv-match {
+    color: #4ecdc4;
+    font-weight: 700;
+}
+
+.cv-miss {
+    color: #888;
+}
+
+.cv-active-view {
+    background: rgba(78, 205, 196, 0.08);
+}
+
+.cv-summary {
+    margin-top: 8px;
+    color: #aaa;
+    font-size: 0.9em;
+}
+
 .pf-progress {
     max-width: 500px;
     margin: 12px auto;

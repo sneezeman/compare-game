@@ -101,8 +101,8 @@
         </div>
         <div id="pf-sort-row" class="center-row" style="margin: 4px 0; font-size: 0.95em;">
             <span style="color:#888;">Sort by:</span>
-            <label class="pf-sort-opt"><input type="radio" name="pf-sort" value="roi" checked onchange="pfSetSortMode('roi')"> ROI</label>
-            <label class="pf-sort-opt"><input type="radio" name="pf-sort" value="full" onchange="pfSetSortMode('full')"> Full image</label>
+            <label class="pf-sort-opt"><input type="radio" name="pf-sort" value="full" checked onchange="pfSetSortMode('full')"> Full image</label>
+            <label class="pf-sort-opt"><input type="radio" name="pf-sort" value="roi" onchange="pfSetSortMode('roi')"> ROI</label>
         </div>
         <div id="pf-progress" class="pf-progress" style="display:none;">
             <div class="pf-progress-text" id="pf-progress-text">Computing metrics…</div>
@@ -191,6 +191,11 @@
         <div id="results-section">
             <h2>Tournament Results</h2>
             <div id="results-podium" class="results-podium"></div>
+            <div id="cross-view-section" style="display:none; margin-top: 20px;">
+                <h3 style="color: #aaa;">Cross-view agreement</h3>
+                <p id="cross-view-status" style="color:#888; font-size: 0.9em;"></p>
+                <div id="cross-view-content"></div>
+            </div>
             <h3 style="margin-top: 20px; color: #aaa;">Full Ranking</h3>
             <table id="full-ranking-table"></table>
             <div class="results-actions">
