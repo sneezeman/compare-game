@@ -99,6 +99,17 @@
                 oninput="resizePrefilter(this.value)"></label>
             <span id="pf-size-label">500px</span>
         </div>
+        <div id="pf-sort-row" class="center-row" style="margin: 4px 0; font-size: 0.95em;">
+            <span style="color:#888;">Sort by:</span>
+            <label class="pf-sort-opt"><input type="radio" name="pf-sort" value="roi" checked onchange="pfSetSortMode('roi')"> ROI</label>
+            <label class="pf-sort-opt"><input type="radio" name="pf-sort" value="full" onchange="pfSetSortMode('full')"> Full image</label>
+        </div>
+        <div id="pf-progress" class="pf-progress" style="display:none;">
+            <div class="pf-progress-text" id="pf-progress-text">Computing metrics…</div>
+            <div class="pf-progress-bar-outer">
+                <div class="pf-progress-bar-inner" id="pf-progress-bar"></div>
+            </div>
+        </div>
         <div class="pf-viewer">
             <div class="pf-side">
                 <div class="pf-img-wrap">
@@ -186,7 +197,7 @@
                 <button class="btn" onclick="exportResults()">Export Results</button>
                 <button class="btn btn-secondary" onclick="rerunSameROI()">Re-run (same ROI)</button>
                 <button class="btn btn-secondary" onclick="rerunWithNewROI()">New ROI</button>
-                <button class="btn btn-secondary" onclick="location.reload()">Start Over</button>
+                <button class="btn btn-secondary" onclick="location.reload()">To the main screen</button>
             </div>
         </div>
     </div>

@@ -521,6 +521,70 @@ def set_epoch_config():
     return jsonify(ok=True)
 
 
+@app.route('/api/prefilter-list', methods=['POST'])
+def prefilter_list():
+    """Fast: return just the candidate list (no metric computation) plus
+    ROI flag. The frontend then fetches metrics per-candidate with progress."""
+    data = request.get_json(force=True) if request.data else {}
+    exps_config = data.get('experiments', [])
+    roi = data.get('roi')
+    if not exps_config:
+        return jsonify(error='No experiments specified'), 400
+
+    candidates = []
+    for ec in exps_config:
+        exp, err = _check_exp_access(ec['exp_id'])
+        if err:
+            return err
+        exp = _ensure_loaded(ec['exp_id'])
+        if not exp:
+            return jsonify(error=f'Experiment {ec["exp_id"]} not found'), 404
+        exp_label = _format_exp_label(exp['filename'])
+        epoch_labels = exp.get('epoch_labels',
+                               [f'Ep.{i + 1}' for i in range(exp['num_epochs'])])
+        raw_first = exp.get('epoch_config', {}).get('raw_first', False)
+        for epoch in range(exp['num_epochs']):
+            if raw_first and epoch == 0:
+                continue
+            epoch_label = epoch_labels[epoch] if epoch < len(epoch_labels) else f'Ep.{epoch + 1}'
+            candidates.append({
+                'exp_id': ec['exp_id'],
+                'epoch': epoch,
+                'label': f'{exp_label} {epoch_label}',
+            })
+
+    if len(candidates) < 4:
+        return jsonify(error='Too few candidates for pre-filtering'), 400
+
+    return jsonify(candidates=candidates, has_roi=bool(roi),
+                   elimination_metrics=ELIMINATION_METRICS)
+
+
+@app.route('/api/prefilter-metric', methods=['POST'])
+def prefilter_metric():
+    """Return raw elimination-metric values for one candidate.
+    Body: {exp_id, epoch, r_o, roi, use_roi: bool}"""
+    data = request.get_json(force=True) if request.data else {}
+    exp_id = data.get('exp_id')
+    epoch = int(data.get('epoch', 0))
+    r_o = float(data.get('r_o', 0.5))
+    roi = data.get('roi') if data.get('use_roi', True) else None
+
+    exp, err = _check_exp_access(exp_id)
+    if err:
+        return err
+    exp = _ensure_loaded(exp_id)
+    if not exp:
+        return jsonify(error='Experiment not found'), 404
+    if epoch < 0 or epoch >= exp['num_epochs']:
+        return jsonify(error='Invalid epoch'), 400
+
+    metrics = _get_cached_metrics(exp_id, epoch, roi, r_o)
+    values = {name: round(val, 6) for name, val, _ in metrics
+              if name in ELIMINATION_METRICS}
+    return jsonify(values=values)
+
+
 @app.route('/api/prefilter', methods=['POST'])
 def prefilter():
     """Compute metrics for all candidates and return them sorted by consensus score.
@@ -561,34 +625,42 @@ def prefilter():
     if len(candidates) < 4:
         return jsonify(error='Too few candidates for pre-filtering'), 400
 
-    # Compute metrics for each candidate using elimination-proven metrics only.
-    # ELIMINATION_METRICS maps metric name -> weight (negative = inverted).
+    # Compute the consensus elimination score for one ROI setting.
+    def _consensus_scores(use_roi):
+        raw = []
+        for c in candidates:
+            m = _get_cached_metrics(c['exp_id'], c['epoch'],
+                                    roi if use_roi else None, r_o)
+            raw.append({name: val for name, val, _ in m if name in ELIMINATION_METRICS})
+        # Z-score each metric across candidates, then weighted mean
+        zsum = [0.0] * len(candidates)
+        zcount = [0] * len(candidates)
+        for mname, weight in ELIMINATION_METRICS.items():
+            vals = [r.get(mname, 0) for r in raw]
+            mean = float(np.mean(vals))
+            std = float(np.std(vals))
+            for i, v in enumerate(vals):
+                z = (v - mean) / std if std > 1e-10 else 0.0
+                zsum[i] += z * weight
+                zcount[i] += 1
+        return [zsum[i] / zcount[i] if zcount[i] else 0.0 for i in range(len(candidates))]
+
+    scores_roi = _consensus_scores(use_roi=True)
+    # Only compute full-image scores separately if an ROI is actually set,
+    # otherwise they're identical.
+    scores_full = _consensus_scores(use_roi=False) if roi else list(scores_roi)
+
     scored = []
-    for c in candidates:
-        metrics = _get_cached_metrics(c['exp_id'], c['epoch'], roi, r_o)
-        values = {}
-        for name, val, hib in metrics:
-            if name in ELIMINATION_METRICS:
-                values[name] = val
-        scored.append({**c, '_values': values})
+    for i, c in enumerate(candidates):
+        scored.append({
+            'exp_id': c['exp_id'],
+            'epoch': c['epoch'],
+            'label': c['label'],
+            'score': float(scores_roi[i]),
+            'score_full': float(scores_full[i]),
+        })
 
-    # Z-score each metric across all candidates, then weighted average
-    for mname, weight in ELIMINATION_METRICS.items():
-        vals = [s['_values'].get(mname, 0) for s in scored]
-        mean = np.mean(vals)
-        std = np.std(vals)
-        for s in scored:
-            raw = s['_values'].get(mname, 0)
-            z = (raw - mean) / std if std > 1e-10 else 0.0
-            # weight sign handles inversion (Spec. Struct. has weight -1)
-            s['_values'][mname] = z * weight
-
-    # Consensus = weighted mean of z-scores (higher = better)
-    for s in scored:
-        s['score'] = float(np.mean(list(s['_values'].values())))
-        del s['_values']
-
-    # Sort best → worst
+    # Sort best → worst by ROI score (default)
     scored.sort(key=lambda s: s['score'], reverse=True)
 
     # Cutoff index: keep top (1 - cut_frac), at least 3
@@ -602,9 +674,11 @@ def prefilter():
             'epoch': s['epoch'],
             'label': s['label'],
             'score': round(s['score'], 3),
+            'score_full': round(s['score_full'], 3),
         } for s in scored],
         cutoff=cutoff,
         total=len(scored),
+        has_roi=bool(roi),
     )
 
 

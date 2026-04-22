@@ -678,40 +678,127 @@ function applyROISuggestion(x, y, w, h) {
 // Phase 2.5: Pre-filter
 // =========================================================================
 
-let prefilterCandidates = [];  // sorted by score (best first)
+let prefilterCandidates = [];  // sorted by current mode (best first)
 let pfIdxLeft = 0;   // index into full list (left viewer)
 let pfIdxRight = 0;  // index into full list (right viewer)
 let pfImgSize = 500;
+let pfSortMode = 'roi';  // 'roi' or 'full'
+let pfHasRoi = false;
 
 async function showPrefilter() {
     showPhase('prefilter');
     document.getElementById('pf-img-left').src = '';
     document.getElementById('pf-img-right').src = '';
-    document.getElementById('pf-label-left').textContent = 'Computing metrics...';
+    document.getElementById('pf-label-left').textContent = '';
     document.getElementById('pf-label-right').textContent = '';
+
+    const progress = document.getElementById('pf-progress');
+    const progressText = document.getElementById('pf-progress-text');
+    const progressBar = document.getElementById('pf-progress-bar');
+    progress.style.display = 'block';
+    progressText.textContent = 'Loading candidate list…';
+    progressBar.style.width = '0%';
 
     try {
         const expsConfig = state.selected.map(s => ({ exp_id: s.expId }));
-        const resp = await fetch('/api/prefilter', {
+
+        // Phase 1: fast list (no metric computation)
+        const listResp = await fetch('/api/prefilter-list', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ experiments: expsConfig, roi: state.roi, r_o: state.rO }),
+            body: JSON.stringify({ experiments: expsConfig, roi: state.roi }),
         });
-        const data = await resp.json();
-        if (!resp.ok || data.error) {
+        const listData = await listResp.json();
+        if (!listResp.ok || listData.error) {
+            progress.style.display = 'none';
             document.getElementById('pf-label-left').innerHTML =
-                `<span style="color:#e94560">Error: ${data.error || resp.status}. Use "Skip" to proceed.</span>`;
+                `<span style="color:#e94560">Error: ${listData.error || listResp.status}. Use "Skip".</span>`;
             return;
         }
 
-        prefilterCandidates = data.candidates;
-        // No pre-filled exclusions — user decides
-        prefilterCandidates.forEach(c => { c._excluded = false; });
+        const candidates = listData.candidates;
+        pfHasRoi = !!listData.has_roi;
+        const elimMetrics = listData.elimination_metrics;  // { name: weight }
+        const elimNames = Object.keys(elimMetrics);
+        const total = candidates.length * (pfHasRoi ? 2 : 1);
 
+        // Phase 2: fetch metrics per candidate (with ROI + full) in parallel,
+        // showing progress as each completes
+        let done = 0;
+        const updateProgress = () => {
+            done++;
+            const pct = Math.round(done / total * 100);
+            progressText.textContent = `Computing metrics: ${done} / ${total}`;
+            progressBar.style.width = pct + '%';
+        };
+
+        const metricsRoi = new Array(candidates.length);
+        const metricsFull = new Array(candidates.length);
+
+        const fetchOne = async (c, idx, useRoi) => {
+            const resp = await fetch('/api/prefilter-metric', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    exp_id: c.exp_id, epoch: c.epoch,
+                    r_o: state.rO, roi: state.roi, use_roi: useRoi,
+                }),
+            });
+            const d = await resp.json();
+            updateProgress();
+            return d.values || {};
+        };
+
+        const promises = [];
+        candidates.forEach((c, i) => {
+            promises.push(fetchOne(c, i, true).then(v => { metricsRoi[i] = v; }));
+            if (pfHasRoi) {
+                promises.push(fetchOne(c, i, false).then(v => { metricsFull[i] = v; }));
+            } else {
+                metricsFull[i] = null;  // same as roi
+            }
+        });
+        await Promise.all(promises);
+
+        // Phase 3: compute z-score consensus client-side
+        const consensus = (valuesArr) => {
+            const scores = new Array(candidates.length).fill(0);
+            elimNames.forEach(name => {
+                const weight = elimMetrics[name];
+                const vals = valuesArr.map(v => (v || {})[name] || 0);
+                const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+                const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
+                const std = Math.sqrt(variance);
+                vals.forEach((v, i) => {
+                    const z = std > 1e-10 ? (v - mean) / std : 0;
+                    scores[i] += z * weight;
+                });
+            });
+            return scores.map(s => s / elimNames.length);
+        };
+
+        const scoresRoi = consensus(metricsRoi);
+        const scoresFull = pfHasRoi ? consensus(metricsFull) : scoresRoi.slice();
+
+        prefilterCandidates = candidates.map((c, i) => ({
+            ...c,
+            score: scoresRoi[i],
+            score_full: scoresFull[i],
+            _excluded: false,
+        }));
+        prefilterCandidates.sort((a, b) => b.score - a.score);
+
+        // Hide the ROI/full toggle if no ROI is set
+        const sortRow = document.getElementById('pf-sort-row');
+        if (sortRow) sortRow.style.display = pfHasRoi ? '' : 'none';
+
+        progress.style.display = 'none';
+        pfSortMode = 'roi';
         pfIdxLeft = 0;
-        pfIdxRight = prefilterCandidates.length - 1;  // start at worst
+        pfIdxRight = prefilterCandidates.length - 1;
         renderPrefilterViewer();
     } catch (e) {
+        progress.style.display = 'none';
         document.getElementById('pf-label-left').innerHTML =
             `<span style="color:#e94560">Failed: ${e.message}. Use "Skip".</span>`;
     }
@@ -725,13 +812,35 @@ function pfRenderSide(side, idx) {
 
     document.getElementById(`pf-img-${side}`).src =
         `/api/frame/${c.exp_id}/${c.epoch}?w=${pfImgSize}${roiParam}`;
+
+    // Show both scores when ROI is in play; otherwise just one.
+    let scoreHtml;
+    if (pfHasRoi) {
+        const primary = pfSortMode === 'roi' ? c.score : c.score_full;
+        const primaryLbl = pfSortMode === 'roi' ? 'ROI' : 'full';
+        const secondary = pfSortMode === 'roi' ? c.score_full : c.score;
+        const secondaryLbl = pfSortMode === 'roi' ? 'full' : 'ROI';
+        scoreHtml = `<strong>${primaryLbl}:</strong> ${primary.toFixed(2)} &nbsp; <span style="opacity:0.6">${secondaryLbl}: ${secondary.toFixed(2)}</span>`;
+    } else {
+        scoreHtml = `score: ${c.score.toFixed(2)}`;
+    }
     document.getElementById(`pf-label-${side}`).innerHTML =
-        `<strong>${escapeHtml(c.label)}</strong> <span class="pf-score">#${idx + 1} / ${n} &bull; score: ${c.score.toFixed(2)}</span>`;
+        `<strong>${escapeHtml(c.label)}</strong> <span class="pf-score">#${idx + 1} / ${n} &bull; ${scoreHtml}</span>`;
     document.getElementById(`pf-pos-${side}`).textContent = `${idx + 1} / ${n}`;
 
     // Highlight border if excluded
     const wrap = document.getElementById(`pf-img-${side}`).parentElement;
     wrap.classList.toggle('pf-excluded-img', !!c._excluded);
+}
+
+function pfSetSortMode(mode) {
+    pfSortMode = mode;
+    const key = mode === 'full' ? 'score_full' : 'score';
+    prefilterCandidates.sort((a, b) => b[key] - a[key]);
+    // Reset navigation to boundaries of the new sort
+    pfIdxLeft = 0;
+    pfIdxRight = prefilterCandidates.length - 1;
+    renderPrefilterViewer();
 }
 
 function renderPrefilterViewer() {
