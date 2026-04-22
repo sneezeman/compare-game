@@ -669,9 +669,14 @@ def start_tournament():
     session_id = str(uuid.uuid4())[:8]
     t = Tournament(list(range(len(candidates))))
 
+    # Record every experiment the user originally selected, even ones that got
+    # entirely pre-filtered out — so the result file still lists them as done.
+    selected_exp_ids = [ec['exp_id'] for ec in exps_config]
+
     tournaments[session_id] = {
         'tournament': t,
         'candidates': candidates,
+        'selected_exp_ids': selected_exp_ids,
         'roi': roi,
         'r_o': r_o,
         'user_name': user_name,
@@ -965,11 +970,16 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
         r_o = tdata.get('r_o', 0.5)
         user_name = tdata.get('user_name', '')
 
-        exp_ids = []
-        for c in ranking:
-            if c['exp_id'] not in exp_ids:
-                exp_ids.append(c['exp_id'])
-        gif_names = [experiments[eid]['filename'] for eid in exp_ids]
+        # Prefer the originally selected experiments (covers the case where
+        # pre-filter removed every candidate from a GIF, so it wouldn't appear
+        # in the ranking). Fall back to ranking-derived IDs for legacy sessions.
+        exp_ids = list(tdata.get('selected_exp_ids') or [])
+        if not exp_ids:
+            for c in ranking:
+                if c['exp_id'] not in exp_ids:
+                    exp_ids.append(c['exp_id'])
+        gif_names = [experiments[eid]['filename']
+                     for eid in exp_ids if eid in experiments]
 
         lines = []
         lines.append('Compare Game \u2014 Tournament Results')
