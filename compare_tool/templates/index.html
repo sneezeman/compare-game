@@ -136,6 +136,9 @@
                     <input type="checkbox" id="pf-exclude-cb" onchange="pfExcludeToggle()">
                     Remove this candidate
                 </label>
+                <div id="pf-min-warn" style="display:none; color:#e94560; font-size:0.85em; margin-top:4px;">
+                    You must keep at least 3 candidates for the tournament.
+                </div>
             </div>
         </div>
         <div class="center-row" style="margin-top: 16px;">
@@ -143,7 +146,7 @@
             <span style="color:#888;"> of <span id="pf-total-n">0</span></span>
         </div>
         <div class="center-row" style="margin-top: 8px; gap: 12px;">
-            <button class="btn" onclick="applyPrefilter()">
+            <button id="pf-start-btn" class="btn" onclick="applyPrefilter()">
                 Start Comparison (<span id="prefilter-keep-count">0</span> candidates)
             </button>
             <button class="btn btn-secondary" onclick="skipPrefilter()">

@@ -998,9 +998,26 @@ function pfNav(side, delta) {
     renderPrefilterViewer();
 }
 
+const PF_MIN_KEEP = 3;
+
 function pfExcludeToggle() {
     const cb = document.getElementById('pf-exclude-cb');
-    prefilterCandidates[pfIdxRight]._excluded = cb.checked;
+    const candidate = prefilterCandidates[pfIdxRight];
+    // If removing this would drop us below the minimum, veto the change
+    if (cb.checked && !candidate._excluded) {
+        const keptAfter = prefilterCandidates.filter(c => !c._excluded).length - 1;
+        if (keptAfter < PF_MIN_KEEP) {
+            cb.checked = false;
+            const warn = document.getElementById('pf-min-warn');
+            if (warn) {
+                warn.style.display = 'block';
+                clearTimeout(warn._hideTimer);
+                warn._hideTimer = setTimeout(() => { warn.style.display = 'none'; }, 3000);
+            }
+            return;
+        }
+    }
+    candidate._excluded = cb.checked;
     renderPrefilterViewer();
 }
 
@@ -1059,6 +1076,10 @@ function updatePrefilterCount() {
     document.getElementById('prefilter-keep-count').textContent = kept;
     document.getElementById('pf-cut-n').textContent = cut;
     document.getElementById('pf-total-n').textContent = prefilterCandidates.length;
+    // Disable start if we'd drop below the minimum (belt and suspenders —
+    // the checkbox guard already prevents this, but just in case)
+    const startBtn = document.getElementById('pf-start-btn');
+    if (startBtn) startBtn.disabled = kept < PF_MIN_KEEP;
 }
 
 function skipPrefilter() {
