@@ -543,10 +543,7 @@ def prefilter_list():
         exp_label = _format_exp_label(exp['filename'])
         epoch_labels = exp.get('epoch_labels',
                                [f'Ep.{i + 1}' for i in range(exp['num_epochs'])])
-        raw_first = exp.get('epoch_config', {}).get('raw_first', False)
         for epoch in range(exp['num_epochs']):
-            if raw_first and epoch == 0:
-                continue
             epoch_label = epoch_labels[epoch] if epoch < len(epoch_labels) else f'Ep.{epoch + 1}'
             candidates.append({
                 'exp_id': ec['exp_id'],
@@ -612,10 +609,7 @@ def prefilter():
         exp_label = _format_exp_label(exp['filename'])
         epoch_labels = exp.get('epoch_labels',
                                [f'Ep.{i + 1}' for i in range(exp['num_epochs'])])
-        raw_first = exp.get('epoch_config', {}).get('raw_first', False)
         for epoch in range(exp['num_epochs']):
-            if raw_first and epoch == 0:
-                continue
             epoch_label = epoch_labels[epoch] if epoch < len(epoch_labels) else f'Ep.{epoch + 1}'
             candidates.append({
                 'exp_id': ec['exp_id'],
@@ -858,12 +852,8 @@ def start_tournament():
         exp_label = _format_exp_label(exp['filename'])
         epoch_labels = exp.get('epoch_labels',
                                [f'Ep.{i + 1}' for i in range(exp['num_epochs'])])
-        raw_first = exp.get('epoch_config', {}).get('raw_first', False)
         for epoch in range(exp['num_epochs']):
             epoch_label = epoch_labels[epoch] if epoch < len(epoch_labels) else f'Ep.{epoch + 1}'
-            # Skip RAW frame from tournament — it's unprocessed reference, not a candidate
-            if raw_first and epoch == 0:
-                continue
             # Skip pre-filtered candidates
             if (ec['exp_id'], epoch) in exclude:
                 continue
@@ -877,7 +867,7 @@ def start_tournament():
     # Sort candidates by epoch descending — later epochs are likely better,
     # so placing them first helps merge-sort find the winner faster
     if not candidates:
-        return jsonify(error='No candidates after filtering (all frames may be RAW)'), 400
+        return jsonify(error='No candidates'), 400
 
     candidates.sort(key=lambda c: c['epoch'], reverse=True)
 
