@@ -28,16 +28,16 @@ def compute_label_exclusion(W, H):
     """Top-right corner where users typically burn in epoch/RAW labels.
     This region must be masked out of variability stats so the bright label
     doesn't dominate the heatmap or pull ROI suggestions toward itself."""
-    # Width: ~35% of frame width, capped at 800 px, never below 250 px
-    exclude_w = max(250, min(int(W * 0.35), 800))
+    # Width: ~17% of frame width, capped at 400 px, never below 150 px
+    exclude_w = max(150, min(int(W * 0.17), 400))
     exclude_w = min(exclude_w, W)
     # Height: for short/wide views (view1, view2) the label spans most of the
-    # height; for square views (view0) it's only the top quarter.
+    # height; for square views (view0) it's only the top sliver.
     if H < 800:
-        exclude_h = int(H * 0.85)
+        exclude_h = int(H * 0.75)
     else:
-        exclude_h = min(int(H * 0.25), 600)
-    exclude_h = max(100, exclude_h)
+        exclude_h = min(int(H * 0.13), 300)
+    exclude_h = max(80, exclude_h)
     exclude_h = min(exclude_h, H)
     return (W - exclude_w, 0, exclude_w, exclude_h)
 
