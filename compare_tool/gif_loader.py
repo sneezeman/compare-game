@@ -24,11 +24,34 @@ def extract_frames(gif_path):
     return frames
 
 
-def compute_variability_map(frames):
+def compute_label_exclusion(W, H):
+    """Top-right corner where users typically burn in epoch/RAW labels.
+    This region must be masked out of variability stats so the bright label
+    doesn't dominate the heatmap or pull ROI suggestions toward itself."""
+    # Width: ~25% of frame width, capped at 600 px, never below 200 px
+    exclude_w = max(200, min(int(W * 0.25), 600))
+    exclude_w = min(exclude_w, W)
+    # Height: for short/wide views (view1, view2) the label spans most of the
+    # height; for square views (view0) it's only the top quarter.
+    if H < 800:
+        exclude_h = int(H * 0.85)
+    else:
+        exclude_h = min(int(H * 0.25), 600)
+    exclude_h = max(100, exclude_h)
+    exclude_h = min(exclude_h, H)
+    return (W - exclude_w, 0, exclude_w, exclude_h)
+
+
+def compute_variability_map(frames, mask_label_corner=True):
     """Compute pixel-wise standard deviation across frames.
-    Returns a 2D array normalized to [0, 1]."""
+    Returns a 2D array normalized to [0, 1]. The top-right label corner is
+    zeroed so it doesn't dominate the heatmap."""
     stack = np.stack(frames, axis=0)
     std_map = np.std(stack, axis=0)
+    if mask_label_corner:
+        H, W = std_map.shape
+        x, y, w, h = compute_label_exclusion(W, H)
+        std_map[y:y + h, x:x + w] = 0.0
     max_val = std_map.max()
     if max_val > 0:
         std_map = std_map / max_val
@@ -80,7 +103,8 @@ def _compute_iou(a, b):
     return inter_area / union_area
 
 
-def suggest_rois(variability_map, k=5, min_size=256, max_size_frac=0.4):
+def suggest_rois(variability_map, k=5, min_size=256, max_size_frac=0.4,
+                 exclusion_box=None):
     """Suggest top-K ROI regions based on variability.
 
     Uses a sliding window approach to find rectangular regions
@@ -149,6 +173,13 @@ def suggest_rois(variability_map, k=5, min_size=256, max_size_frac=0.4):
 
         for y in range(0, h - win_h + 1, stride_y):
             for x in range(0, w - win_w + 1, stride_x):
+                # Skip windows that overlap the label-exclusion box at all.
+                # Even partial overlap means the metric will be biased.
+                if exclusion_box is not None:
+                    ex, ey, ew, eh = exclusion_box
+                    if (x < ex + ew and x + win_w > ex and
+                            y < ey + eh and y + win_h > ey):
+                        continue
                 # Sum via integral image: sum = I[y2,x2] - I[y1,x2] - I[y2,x1] + I[y1,x1]
                 y2 = y + win_h
                 x2 = x + win_w

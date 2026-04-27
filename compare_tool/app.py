@@ -20,8 +20,9 @@ import numpy as np
 from flask import Flask, g, jsonify, render_template, request, send_file
 from PIL import Image
 
-from gif_loader import (compute_variability_map, extract_frames,
-                        suggest_rois, variability_to_heatmap_rgba)
+from gif_loader import (compute_label_exclusion, compute_variability_map,
+                        extract_frames, suggest_rois,
+                        variability_to_heatmap_rgba)
 from metrics import compute_all, compute_metric_zscores, METRIC_GROUPS, ELIMINATION_METRICS
 from tournament import Tournament
 
@@ -446,8 +447,12 @@ def get_roi_suggestions(exp_id):
     if not exp:
         return jsonify(error='Experiment not found'), 404
 
-    rois = suggest_rois(exp['variability'])
-    return jsonify(suggestions=rois)
+    H, W = exp['variability'].shape
+    ex, ey, ew, eh = compute_label_exclusion(W, H)
+    rois = suggest_rois(exp['variability'],
+                        exclusion_box=(ex, ey, ew, eh))
+    return jsonify(suggestions=rois,
+                   exclusion={'x': ex, 'y': ey, 'w': ew, 'h': eh})
 
 
 @app.route('/api/metrics/<exp_id>/<int:epoch>')

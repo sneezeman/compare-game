@@ -22,6 +22,8 @@ const state = {
     submitting: false,
     // Cross-view background computation job id
     crossViewJobId: null,
+    // Top-right label corner (server-supplied) {x, y, w, h} to mask out of ROI
+    roiExclusion: null,
     // Internal
     _roiMouseDown: null,
     _roiMouseMove: null,
@@ -537,6 +539,7 @@ function initROISelection() {
         requestAnimationFrame(() => {
             syncCanvasSize();
             overlayImg.src = `/api/variability/${current.expId}`;
+            drawROIExclusionOverlay();
             if (state.roi) {
                 const [x, y, w, h] = state.roi.split(',').map(Number);
                 ctx.strokeStyle = '#4ecdc4';
@@ -592,7 +595,8 @@ function initROISelection() {
     state._roiMouseDown = e => {
         if (!container.contains(e.target)) return;
         e.preventDefault();
-        const pos = imgCoords(e);
+        const raw = imgCoords(e);
+        const pos = clampToOutsideExclusion(raw.x, raw.y);
         startX = pos.x;
         startY = pos.y;
         drawing = true;
@@ -601,13 +605,15 @@ function initROISelection() {
     state._roiMouseMove = e => {
         if (!drawing) return;
         e.preventDefault();
-        const pos = imgCoords(e);
+        const raw = imgCoords(e);
+        const pos = clampToOutsideExclusion(raw.x, raw.y);
         const x = Math.min(startX, pos.x);
         const y = Math.min(startY, pos.y);
         const w = Math.abs(pos.x - startX);
         const h = Math.abs(pos.y - startY);
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawROIExclusionOverlay();
         ctx.strokeStyle = '#4ecdc4';
         ctx.lineWidth = 3;
         ctx.setLineDash([8, 4]);
@@ -619,7 +625,8 @@ function initROISelection() {
     state._roiMouseUp = e => {
         if (!drawing) return;
         drawing = false;
-        const pos = imgCoords(e);
+        const raw = imgCoords(e);
+        const pos = clampToOutsideExclusion(raw.x, raw.y);
         const x = Math.round(Math.min(startX, pos.x));
         const y = Math.round(Math.min(startY, pos.y));
         const w = Math.round(Math.abs(pos.x - startX));
@@ -642,6 +649,10 @@ async function loadROISuggestions(expId) {
     try {
         const resp = await fetch(`/api/roi-suggestions/${expId}`);
         const data = await resp.json();
+        // Stash exclusion box so the canvas overlay & drag clamp can use it
+        state.roiExclusion = data.exclusion || null;
+        // Re-render the exclusion overlay now that we have the box
+        drawROIExclusionOverlay();
         if (!data.suggestions || data.suggestions.length === 0) {
             container.innerHTML = '';
             return;
@@ -659,6 +670,47 @@ async function loadROISuggestions(expId) {
     }
 }
 
+// Draw a translucent diagonal-stripe pattern over the label corner so the
+// user can see the masked region. Re-run every time the canvas is repainted.
+function drawROIExclusionOverlay() {
+    const canvas = document.getElementById('roi-canvas');
+    if (!canvas) return;
+    const ex = state.roiExclusion;
+    if (!ex) return;
+    const ctx = canvas.getContext('2d');
+    ctx.save();
+    // Solid dim fill
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.fillRect(ex.x, ex.y, ex.w, ex.h);
+    // Diagonal stripes for visibility
+    ctx.strokeStyle = 'rgba(233, 69, 96, 0.55)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    const step = 40;
+    for (let i = -ex.h; i < ex.w + ex.h; i += step) {
+        ctx.moveTo(ex.x + i, ex.y);
+        ctx.lineTo(ex.x + i + ex.h, ex.y + ex.h);
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
+// Clamp a point so it doesn't fall inside the exclusion box. The point is
+// pushed to the nearest edge (left or bottom) of the box.
+function clampToOutsideExclusion(x, y) {
+    const ex = state.roiExclusion;
+    if (!ex) return { x, y };
+    const inside = x >= ex.x && x < ex.x + ex.w && y >= ex.y && y < ex.y + ex.h;
+    if (!inside) return { x, y };
+    // Snap to whichever edge is closer (left edge or bottom edge)
+    const distLeft = x - ex.x;
+    const distBottom = (ex.y + ex.h) - y;
+    if (distLeft < distBottom) {
+        return { x: ex.x, y };
+    }
+    return { x, y: ex.y + ex.h };
+}
+
 function applyROISuggestion(x, y, w, h) {
     state.roi = `${x},${y},${w},${h}`;
     document.getElementById('roi-info').textContent = `ROI: ${w}x${h} at (${x}, ${y})`;
@@ -668,6 +720,7 @@ function applyROISuggestion(x, y, w, h) {
     const canvas = document.getElementById('roi-canvas');
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawROIExclusionOverlay();
     ctx.strokeStyle = '#4ecdc4';
     ctx.lineWidth = 3;
     ctx.setLineDash([8, 4]);
