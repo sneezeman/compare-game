@@ -7,14 +7,16 @@ from PIL import Image
 
 
 def extract_frames(gif_path):
-    """Extract all frames from a GIF as grayscale float64 arrays in [0, 1].
-    Returns list of numpy arrays."""
+    """Extract all frames from a GIF as grayscale float32 arrays in [0, 1].
+    float32 instead of float64 halves memory: a 38-frame 2000x2000 GIF needs
+    ~580 MB instead of ~1.16 GB, which is the difference between staying alive
+    and getting OOM-killed on a 4 GB box."""
     img = Image.open(gif_path)
     frames = []
     try:
         while True:
             frame = img.convert('L')
-            arr = np.array(frame, dtype=np.float64) / 255.0
+            arr = (np.array(frame, dtype=np.float32) / np.float32(255.0))
             frames.append(arr)
             img.seek(img.tell() + 1)
     except EOFError:
@@ -28,15 +30,15 @@ def compute_label_exclusion(W, H):
     """Top-right corner where users typically burn in epoch/RAW labels.
     This region must be masked out of variability stats so the bright label
     doesn't dominate the heatmap or pull ROI suggestions toward itself."""
-    # Width: ~22% of frame width, capped at 450 px, never below 200 px
-    exclude_w = max(200, min(int(W * 0.22), 450))
+    # Width: ~27% of frame width, capped at 600 px, never below 200 px
+    exclude_w = max(200, min(int(W * 0.27), 600))
     exclude_w = min(exclude_w, W)
-    # Height: ~13% of frame height for square views (view0); slightly more
-    # for short/wide views (view2) where labels are taller relative to height.
+    # Height: ~14% for square views (view0); ~60% for short/wide views
+    # (view2) where the label takes a much larger fraction of height.
     if H < 800:
-        exclude_h = min(int(H * 0.45), 250)
+        exclude_h = min(int(H * 0.60), 320)
     else:
-        exclude_h = min(int(H * 0.13), 280)
+        exclude_h = min(int(H * 0.14), 320)
     exclude_h = max(80, exclude_h)
     exclude_h = min(exclude_h, H)
     return (W - exclude_w, 0, exclude_w, exclude_h)
@@ -45,16 +47,30 @@ def compute_label_exclusion(W, H):
 def compute_variability_map(frames, mask_label_corner=True):
     """Compute pixel-wise standard deviation across frames.
     Returns a 2D array normalized to [0, 1]. The top-right label corner is
-    zeroed so it doesn't dominate the heatmap."""
-    stack = np.stack(frames, axis=0)
-    std_map = np.std(stack, axis=0)
+    zeroed so it doesn't dominate the heatmap.
+
+    Implemented with Welford's online algorithm so we don't allocate the
+    N×H×W stack np.std would build internally — for a 38×2000×2000 GIF
+    that stack is ~600 MB on top of the frames already in memory."""
+    n = len(frames)
+    H, W = frames[0].shape
+    if n < 2:
+        return np.zeros((H, W), dtype=np.float32)
+
+    mean = np.zeros((H, W), dtype=np.float32)
+    m2 = np.zeros((H, W), dtype=np.float32)
+    for i, f in enumerate(frames, 1):
+        delta = f - mean
+        mean += delta / np.float32(i)
+        m2 += delta * (f - mean)
+    std_map = np.sqrt(m2 / np.float32(n), dtype=np.float32)
+
     if mask_label_corner:
-        H, W = std_map.shape
         x, y, w, h = compute_label_exclusion(W, H)
         std_map[y:y + h, x:x + w] = 0.0
-    max_val = std_map.max()
+    max_val = float(std_map.max())
     if max_val > 0:
-        std_map = std_map / max_val
+        std_map = std_map / np.float32(max_val)
     return std_map
 
 
