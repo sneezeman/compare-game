@@ -670,18 +670,12 @@ async function loadROISuggestions(expId) {
     }
 }
 
-// Subtle dim fill over the label corner so the user can see it's masked,
-// without the loud diagonal stripes that distracted from the image.
+// The label corner is masked invisibly: the variability heatmap doesn't
+// show it (server-side mask) and ROI drag rectangles get clamped against
+// it, but we don't paint anything on top of the image.
 function drawROIExclusionOverlay() {
-    const canvas = document.getElementById('roi-canvas');
-    if (!canvas) return;
-    const ex = state.roiExclusion;
-    if (!ex) return;
-    const ctx = canvas.getContext('2d');
-    ctx.save();
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.fillRect(ex.x, ex.y, ex.w, ex.h);
-    ctx.restore();
+    // intentional no-op — kept as a hook in case we want to re-enable a
+    // visible indicator later
 }
 
 // Clamp a rectangle so it never extends into the exclusion box. We pick
