@@ -679,7 +679,7 @@ function drawROIExclusionOverlay() {
     if (!ex) return;
     const ctx = canvas.getContext('2d');
     ctx.save();
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
     ctx.fillRect(ex.x, ex.y, ex.w, ex.h);
     ctx.restore();
 }
