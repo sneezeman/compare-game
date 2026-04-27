@@ -595,8 +595,7 @@ function initROISelection() {
     state._roiMouseDown = e => {
         if (!container.contains(e.target)) return;
         e.preventDefault();
-        const raw = imgCoords(e);
-        const pos = clampToOutsideExclusion(raw.x, raw.y);
+        const pos = imgCoords(e);
         startX = pos.x;
         startY = pos.y;
         drawing = true;
@@ -605,36 +604,37 @@ function initROISelection() {
     state._roiMouseMove = e => {
         if (!drawing) return;
         e.preventDefault();
-        const raw = imgCoords(e);
-        const pos = clampToOutsideExclusion(raw.x, raw.y);
-        const x = Math.min(startX, pos.x);
-        const y = Math.min(startY, pos.y);
-        const w = Math.abs(pos.x - startX);
-        const h = Math.abs(pos.y - startY);
+        const pos = imgCoords(e);
+        const r = clampRectAgainstExclusion(
+            Math.min(startX, pos.x), Math.min(startY, pos.y),
+            Math.abs(pos.x - startX), Math.abs(pos.y - startY),
+        );
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         drawROIExclusionOverlay();
         ctx.strokeStyle = '#4ecdc4';
         ctx.lineWidth = 3;
         ctx.setLineDash([8, 4]);
-        ctx.strokeRect(x, y, w, h);
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
         ctx.fillStyle = 'rgba(78, 205, 196, 0.15)';
-        ctx.fillRect(x, y, w, h);
+        ctx.fillRect(r.x, r.y, r.w, r.h);
     };
 
     state._roiMouseUp = e => {
         if (!drawing) return;
         drawing = false;
-        const raw = imgCoords(e);
-        const pos = clampToOutsideExclusion(raw.x, raw.y);
-        const x = Math.round(Math.min(startX, pos.x));
-        const y = Math.round(Math.min(startY, pos.y));
-        const w = Math.round(Math.abs(pos.x - startX));
-        const h = Math.round(Math.abs(pos.y - startY));
+        const pos = imgCoords(e);
+        const r = clampRectAgainstExclusion(
+            Math.round(Math.min(startX, pos.x)),
+            Math.round(Math.min(startY, pos.y)),
+            Math.round(Math.abs(pos.x - startX)),
+            Math.round(Math.abs(pos.y - startY)),
+        );
 
-        if (w > 10 && h > 10) {
-            state.roi = `${x},${y},${w},${h}`;
-            document.getElementById('roi-info').textContent = `ROI: ${w}x${h} at (${x}, ${y})`;
+        if (r.w > 10 && r.h > 10) {
+            state.roi = `${r.x},${r.y},${r.w},${r.h}`;
+            document.getElementById('roi-info').textContent =
+                `ROI: ${r.w}x${r.h} at (${r.x}, ${r.y})`;
             document.getElementById('start-tournament-btn').disabled = false;
         }
     };
@@ -695,20 +695,28 @@ function drawROIExclusionOverlay() {
     ctx.restore();
 }
 
-// Clamp a point so it doesn't fall inside the exclusion box. The point is
-// pushed to the nearest edge (left or bottom) of the box.
-function clampToOutsideExclusion(x, y) {
+// Clamp a rectangle so it never extends into the exclusion box. We pick
+// whichever single edge cut keeps the largest remaining area: trim to the
+// left of the box, or trim below the box.
+function clampRectAgainstExclusion(x, y, w, h) {
     const ex = state.roiExclusion;
-    if (!ex) return { x, y };
-    const inside = x >= ex.x && x < ex.x + ex.w && y >= ex.y && y < ex.y + ex.h;
-    if (!inside) return { x, y };
-    // Snap to whichever edge is closer (left edge or bottom edge)
-    const distLeft = x - ex.x;
-    const distBottom = (ex.y + ex.h) - y;
-    if (distLeft < distBottom) {
-        return { x: ex.x, y };
+    if (!ex || w <= 0 || h <= 0) return { x, y, w, h };
+    const ix1 = Math.max(x, ex.x);
+    const iy1 = Math.max(y, ex.y);
+    const ix2 = Math.min(x + w, ex.x + ex.w);
+    const iy2 = Math.min(y + h, ex.y + ex.h);
+    if (ix1 >= ix2 || iy1 >= iy2) return { x, y, w, h };  // no overlap
+    // Option A: trim right edge to ex.x (keep left strip)
+    const aW = Math.max(0, ex.x - x);
+    const aArea = aW * h;
+    // Option B: trim top edge to ex.y + ex.h (keep bottom strip)
+    const bY = ex.y + ex.h;
+    const bH = Math.max(0, (y + h) - bY);
+    const bArea = w * bH;
+    if (aArea >= bArea) {
+        return { x, y, w: aW, h };
     }
-    return { x, y: ex.y + ex.h };
+    return { x, y: bY, w, h: bH };
 }
 
 function applyROISuggestion(x, y, w, h) {
