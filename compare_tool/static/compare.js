@@ -670,8 +670,8 @@ async function loadROISuggestions(expId) {
     }
 }
 
-// Draw a translucent diagonal-stripe pattern over the label corner so the
-// user can see the masked region. Re-run every time the canvas is repainted.
+// Subtle dim fill over the label corner so the user can see it's masked,
+// without the loud diagonal stripes that distracted from the image.
 function drawROIExclusionOverlay() {
     const canvas = document.getElementById('roi-canvas');
     if (!canvas) return;
@@ -679,19 +679,8 @@ function drawROIExclusionOverlay() {
     if (!ex) return;
     const ctx = canvas.getContext('2d');
     ctx.save();
-    // Solid dim fill
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
     ctx.fillRect(ex.x, ex.y, ex.w, ex.h);
-    // Diagonal stripes for visibility
-    ctx.strokeStyle = 'rgba(233, 69, 96, 0.55)';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    const step = 40;
-    for (let i = -ex.h; i < ex.w + ex.h; i += step) {
-        ctx.moveTo(ex.x + i, ex.y);
-        ctx.lineTo(ex.x + i + ex.h, ex.y + ex.h);
-    }
-    ctx.stroke();
     ctx.restore();
 }
 
