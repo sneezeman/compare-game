@@ -3,7 +3,36 @@ GIF frame extraction and variability map computation.
 """
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
+
+# Cache the font + measured text box at each width — the burn-in script uses
+# font_size = W//20 with DejaVu Sans Bold and labels of up to 3 characters
+# ("RAW", "180", etc.), positioned 10 px from the top/right edges with a
+# 5x5 outline. We mirror that exactly so the mask matches the actual label.
+_LABEL_BOX_CACHE = {}
+
+
+def _measure_label_box(W):
+    """Return (text_w, text_h) for the worst-case label rendered at this
+    image width. Cached because font loading is non-trivial."""
+    if W in _LABEL_BOX_CACHE:
+        return _LABEL_BOX_CACHE[W]
+    font_size = max(10, W // 20)
+    try:
+        font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+    except (IOError, OSError):
+        font = ImageFont.load_default()
+    tmp = Image.new('L', (1, 1))
+    draw = ImageDraw.Draw(tmp)
+    # Worst-case label: the literal word "RAW" is wider than any 3-digit
+    # epoch number in DejaVu Sans Bold, and we want a single mask that
+    # covers every frame.
+    bbox = draw.textbbox((0, 0), "RAW", font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    _LABEL_BOX_CACHE[W] = (text_w, text_h)
+    return text_w, text_h
 
 
 def extract_frames(gif_path):
@@ -27,21 +56,20 @@ def extract_frames(gif_path):
 
 
 def compute_label_exclusion(W, H):
-    """Top-right corner where users typically burn in epoch/RAW labels.
-    This region must be masked out of variability stats so the bright label
-    doesn't dominate the heatmap or pull ROI suggestions toward itself."""
-    # Width: ~27% of frame width, capped at 600 px, never below 200 px
-    exclude_w = max(200, min(int(W * 0.27), 600))
-    exclude_w = min(exclude_w, W)
-    # Height: ~14% for square views (view0); ~60% for short/wide views
-    # (view2) where the label takes a much larger fraction of height.
-    if H < 800:
-        exclude_h = min(int(H * 0.60), 320)
-    else:
-        exclude_h = min(int(H * 0.14), 320)
-    exclude_h = max(80, exclude_h)
-    exclude_h = min(exclude_h, H)
-    return (W - exclude_w, 0, exclude_w, exclude_h)
+    """Top-right corner where the GIF generator burns in epoch/RAW labels.
+
+    The generator (overlay_epoch_number) draws DejaVu Sans Bold at
+    font_size = W//20, positioned at x = W - text_width - 10, y = 10,
+    with a 5x5 (-2..+2) outline. We measure the actual text bbox at this
+    width and add the same 10 px edge padding plus the outline radius and
+    a small safety margin."""
+    text_w, text_h = _measure_label_box(W)
+    # 10 px edge padding + 2 px outline radius + 4 px safety on each side
+    pad_x = 10 + 2 + 4
+    pad_y = 10 + 2 + 4
+    mask_w = min(text_w + pad_x + 2, W)  # +2 right-side outline already past edge
+    mask_h = min(text_h + pad_y + 2, H)
+    return (W - mask_w, 0, mask_w, mask_h)
 
 
 def compute_variability_map(frames, mask_label_corner=True):
