@@ -71,6 +71,8 @@ For reference, chance-level performance for random selection: training tiles ($\
 
 Training-tile tournaments split by date: \textbf{4 recent} (on/after 2026-04-01) vs.\ \textbf{13 older} (before). The recent batch was collected with the updated comparison tool (label-corner masking, finer ROI, pre-filter) — does this give more conclusive metric performance?
 
+\textbf{Confound:} the recent batch is rated entirely by one user (Artem) while the older batch is rated entirely by others. Splitting by rater would produce the exact same partition, so any "recent improvement" signal can be equally well explained by either rater behavior or tool changes — disentangling them requires the older raters to redo a few tournaments with the updated tool.
+
 \textbf{Note on sample size.} 
 The smaller side has 4 tournaments, so individual percentages should be read as $\pm$15\,pp; pay attention to the \emph{direction and magnitude} of the gap across many metrics rather than any single row.
 

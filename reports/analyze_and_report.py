@@ -493,6 +493,14 @@ def generate_recent_vs_older_section(recent_results, older_results,
                  'tool (label-corner masking, finer ROI, pre-filter) — does '
                  'this give more conclusive metric performance?')
     lines.append('')
+    lines.append(r'\textbf{Confound:} the recent batch is rated entirely by '
+                 r'one user (Artem) while the older batch is rated entirely '
+                 r'by others. Splitting by rater would produce the exact same '
+                 r'partition, so any "recent improvement" signal can be '
+                 r'equally well explained by either rater behavior or tool '
+                 r'changes — disentangling them requires the older raters to '
+                 r'redo a few tournaments with the updated tool.')
+    lines.append('')
 
     smaller = min(n_recent, n_older)
     if smaller < 3:
