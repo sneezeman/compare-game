@@ -919,6 +919,51 @@ kbd.kbd {
     font-size: 0.8em;
 }
 
+/* Top-3 final viewer */
+.t3-viewer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 12px;
+}
+
+.t3-img-wrap {
+    width: 700px;
+    border: 3px solid #333;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0a0a1a;
+    transition: width 0.1s;
+    flex: 0 0 auto;
+}
+
+.t3-img-wrap img {
+    width: 100%;
+    display: block;
+    image-rendering: pixelated;
+}
+
+.t3-nav-btn {
+    padding: 6px 18px !important;
+    font-size: 1.2em !important;
+    flex-shrink: 0;
+}
+
+.t3-label {
+    text-align: center;
+    margin-top: 10px;
+    font-weight: 600;
+    color: #ccc;
+}
+
+.t3-pos {
+    text-align: center;
+    color: #888;
+    font-size: 0.85em;
+    margin-top: 2px;
+}
+
 /* Tie explanation */
 .tie-explanation {
     text-align: center;

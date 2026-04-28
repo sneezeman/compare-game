@@ -92,7 +92,11 @@
             Candidates ranked by elimination metrics (best on the left, worst on the right). Mark bad ones for removal.
         </p>
         <p class="center-row" style="margin: 4px 0 12px; color: #aaa;">
-            <span class="pf-hint">Hold <kbd class="kbd">Space</kbd> to swap the two images</span>
+            <span class="pf-hint">Hold <kbd class="kbd">Space</kbd> to swap images
+                &nbsp;&bull;&nbsp; <kbd class="kbd">&larr;</kbd>/<kbd class="kbd">&rarr;</kbd> right side
+                &nbsp;&bull;&nbsp; <kbd class="kbd">&uarr;</kbd>/<kbd class="kbd">&darr;</kbd> left side
+                &nbsp;&bull;&nbsp; <kbd class="kbd">X</kbd> toggle Remove
+            </span>
         </p>
         <div class="size-slider-row">
             <label>Image size: <input type="range" id="pf-size-slider" min="200" max="1200" value="500" step="50"
@@ -194,6 +198,27 @@
         <div id="results-section">
             <h2>Tournament Results</h2>
             <div id="results-podium" class="results-podium"></div>
+
+            <div id="top3-viewer-section" style="display:none; margin-top: 20px;">
+                <h3 style="color:#aaa; margin-bottom: 8px;">Top 3 — Final Look</h3>
+                <p class="center-row" style="margin: 4px 0 8px; color: #aaa;">
+                    <span class="pf-hint"><kbd class="kbd">&larr;</kbd>/<kbd class="kbd">&rarr;</kbd> switch between top 3</span>
+                </p>
+                <div class="size-slider-row">
+                    <label>Image size: <input type="range" id="t3-size-slider" min="200" max="1600" value="700" step="50"></label>
+                    <span id="t3-size-label">700px</span>
+                </div>
+                <div class="t3-viewer">
+                    <button class="btn btn-secondary t3-nav-btn" onclick="t3Nav(-1)">&larr;</button>
+                    <div class="t3-img-wrap">
+                        <img id="t3-img" alt="Top 3 candidate">
+                    </div>
+                    <button class="btn btn-secondary t3-nav-btn" onclick="t3Nav(1)">&rarr;</button>
+                </div>
+                <div id="t3-label" class="t3-label"></div>
+                <div id="t3-pos" class="t3-pos"></div>
+            </div>
+
             <div id="cross-view-section" style="display:none; margin-top: 20px;">
                 <h3 style="color: #aaa;">Cross-view agreement</h3>
                 <p id="cross-view-status" style="color:#888; font-size: 0.9em;"></p>

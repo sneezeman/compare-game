@@ -1114,6 +1114,36 @@ document.addEventListener('keyup', (e) => {
     }
 });
 
+// Pre-filter navigation: arrows for right side, up/down for left side,
+// X to toggle the "Remove this candidate" checkbox.
+document.addEventListener('keydown', (e) => {
+    const phase = document.getElementById('phase-prefilter');
+    if (!phase || !phase.classList.contains('active')) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') return;
+    if (!prefilterCandidates || prefilterCandidates.length === 0) return;
+    if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        pfNav('right', -1);
+    } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        pfNav('right', 1);
+    } else if (e.code === 'ArrowUp') {
+        e.preventDefault();
+        pfNav('left', -1);
+    } else if (e.code === 'ArrowDown') {
+        e.preventDefault();
+        pfNav('left', 1);
+    } else if (e.code === 'KeyX') {
+        e.preventDefault();
+        const cb = document.getElementById('pf-exclude-cb');
+        if (cb) {
+            cb.checked = !cb.checked;
+            pfExcludeToggle();
+        }
+    }
+});
+
 function updatePrefilterCount() {
     const cut = prefilterCandidates.filter(c => c._excluded).length;
     const kept = prefilterCandidates.length - cut;
@@ -1498,6 +1528,67 @@ function updateProgress(progress) {
 // Phase 4: Results
 // =========================================================================
 
+// Top-3 final-look viewer state
+let t3Items = [];
+let t3Idx = 0;
+let t3ImgSize = 700;
+
+function showTop3Viewer(top3) {
+    t3Items = (top3 || []).slice(0, 3);
+    t3Idx = 0;
+    const section = document.getElementById('top3-viewer-section');
+    if (!t3Items.length) {
+        if (section) section.style.display = 'none';
+        return;
+    }
+    if (section) section.style.display = 'block';
+
+    const slider = document.getElementById('t3-size-slider');
+    const sizeLabel = document.getElementById('t3-size-label');
+    if (slider) {
+        slider.value = t3ImgSize;
+        if (sizeLabel) sizeLabel.textContent = t3ImgSize + 'px';
+        slider.oninput = () => {
+            t3ImgSize = parseInt(slider.value);
+            if (sizeLabel) sizeLabel.textContent = t3ImgSize + 'px';
+            renderTop3();
+        };
+    }
+    renderTop3();
+}
+
+function renderTop3() {
+    if (!t3Items.length) return;
+    const c = t3Items[t3Idx];
+    const wrap = document.querySelector('.t3-img-wrap');
+    if (wrap) wrap.style.width = t3ImgSize + 'px';
+    const roiParam = state.roi ? `&roi=${state.roi}` : '';
+    document.getElementById('t3-img').src =
+        `/api/frame/${c.exp_id}/${c.epoch}?w=${t3ImgSize}${roiParam}`;
+    const medals = ['1st', '2nd', '3rd'];
+    document.getElementById('t3-label').textContent =
+        `${medals[t3Idx] || (t3Idx + 1)} — ${c.label}`;
+    document.getElementById('t3-pos').textContent = `${t3Idx + 1} / ${t3Items.length}`;
+}
+
+function t3Nav(delta) {
+    const n = t3Items.length;
+    if (n === 0) return;
+    t3Idx = (t3Idx + delta + n) % n;
+    renderTop3();
+}
+
+// Results-phase keyboard nav for the top-3 viewer
+document.addEventListener('keydown', (e) => {
+    const phase = document.getElementById('phase-results');
+    if (!phase || !phase.classList.contains('active')) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') return;
+    if (!t3Items.length) return;
+    if (e.code === 'ArrowLeft') { e.preventDefault(); t3Nav(-1); }
+    else if (e.code === 'ArrowRight') { e.preventDefault(); t3Nav(1); }
+});
+
 async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
     showPhase('results');
     document.removeEventListener('keydown', handleTournamentKey);
@@ -1511,6 +1602,9 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
         div.innerHTML = `<div class="rank">${medals[i]}</div><div class="epoch-num">${escapeHtml(top3[i].label)}</div>`;
         podium.appendChild(div);
     }
+
+    // Top-3 ROI viewer for one last visual sanity check
+    showTop3Viewer(top3);
 
     // Start polling the cross-view job (if one exists)
     if (state.crossViewJobId) {
