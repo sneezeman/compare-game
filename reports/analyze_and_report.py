@@ -118,6 +118,35 @@ def classify_file(info):
     return 'training'
 
 
+# Cutoff for "recent" training-tile data — the user re-ran with the
+# tightened tournament + ROI tooling starting April 2026.
+RECENT_CUTOFF = '2026-04-01'
+
+
+def file_yearmonth(info):
+    """Extract YYYY-MM from the parsed Date header (preferred) or filename."""
+    d = info.get('date') or ''
+    if d:
+        return d[:7]
+    fn = info.get('filename', '')
+    m = re.search(r'(\d{4})-(\d{2})-\d{2}', fn)
+    if m:
+        return f'{m.group(1)}-{m.group(2)}'
+    return ''
+
+
+def is_recent(info, cutoff=RECENT_CUTOFF):
+    """True when the result file is on/after the recent-data cutoff."""
+    d = info.get('date') or ''
+    if d:
+        return d[:10] >= cutoff
+    fn = info.get('filename', '')
+    m = re.search(r'(\d{4}-\d{2}-\d{2})', fn)
+    if m:
+        return m.group(1) >= cutoff
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
@@ -432,11 +461,155 @@ def generate_elimination_table(elim_results, metric_names, title, n_files):
     return '\n'.join(lines)
 
 
+def generate_recent_vs_older_section(recent_results, older_results,
+                                     recent_elim, older_elim,
+                                     metric_names,
+                                     n_recent, n_older):
+    """Side-by-side comparison of training-tile metrics: recent vs older."""
+    if not (recent_results and older_results):
+        return ''
+
+    # Pick the metrics that exist in BOTH, sorted by recent top-1 rate
+    common = [m for m in metric_names
+              if m in recent_results and m in older_results]
+    if not common:
+        return ''
+
+    common.sort(key=lambda m: recent_results[m]['top1_rate'], reverse=True)
+
+    lines = []
+    lines.append(r'\section{Training Tiles: Recent vs.\ Older Data}')
+    lines.append('')
+    lines.append(f'Training-tile tournaments split by date: '
+                 f'\\textbf{{{n_recent} recent}} (on/after {RECENT_CUTOFF}) '
+                 f'vs.\\ \\textbf{{{n_older} older}} (before). '
+                 'The recent batch was collected with the updated comparison '
+                 'tool (label-corner masking, finer ROI, pre-filter) — does '
+                 'this give more conclusive metric performance?')
+    lines.append('')
+
+    # Caveat for under-powered comparisons. With only a handful of
+    # tournaments per side the percentages can swing wildly.
+    if n_recent < 5 or n_older < 5:
+        smaller = min(n_recent, n_older)
+        lines.append(r'\textbf{Caveat: small sample.} ')
+        lines.append(f'The smaller side has only {smaller} tournament'
+                     f'{"s" if smaller != 1 else ""}, '
+                     'so single-tournament noise dominates the percentages '
+                     'below. Treat the table as a sanity check, not a verdict; '
+                     'collecting another 5--10 training-tile tournaments with '
+                     'the updated tool would make the comparison statistically '
+                     'meaningful.')
+        lines.append('')
+    lines.append(r'\vspace{0.5em}')
+    lines.append(r'\begin{center}')
+    lines.append(r'\small')
+    lines.append(r'\begin{tabular}{lcccc}')
+    lines.append(r'\toprule')
+    lines.append(r' & \multicolumn{2}{c}{\textbf{Recent (' + str(n_recent) + r')}} '
+                 r'& \multicolumn{2}{c}{\textbf{Older (' + str(n_older) + r')}} \\')
+    lines.append(r'\cmidrule(lr){2-3} \cmidrule(lr){4-5}')
+    lines.append(r'\textbf{Metric} & Top-3 & Top-1 & Top-3 & Top-1 \\')
+    lines.append(r'\midrule')
+    for name in common:
+        r_data = recent_results[name]
+        o_data = older_results[name]
+        r_inv = ' (inv.)' if r_data['inverted'] else ''
+        disp = escape_tex(name) + r_inv
+        # Highlight rows where recent top-1 noticeably exceeds older
+        delta_top1 = r_data['top1_rate'] - o_data['top1_rate']
+        row_color = ''
+        if delta_top1 >= 10:
+            row_color = r'\rowcolor{toprow} '
+        elif delta_top1 <= -10:
+            row_color = r'\rowcolor{botrow} '
+        lines.append(f'{row_color}{disp} & '
+                     f'{r_data["agreement"]:.0f}\\% & {r_data["top1_rate"]:.0f}\\% & '
+                     f'{o_data["agreement"]:.0f}\\% & {o_data["top1_rate"]:.0f}\\% \\\\')
+    lines.append(r'\bottomrule')
+    lines.append(r'\end{tabular}')
+    lines.append(r'\end{center}')
+    lines.append('')
+
+    # Summary deltas
+    avg_recent_top1 = np.mean([recent_results[m]['top1_rate'] for m in common])
+    avg_older_top1 = np.mean([older_results[m]['top1_rate'] for m in common])
+    avg_recent_top3 = np.mean([recent_results[m]['agreement'] for m in common])
+    avg_older_top3 = np.mean([older_results[m]['agreement'] for m in common])
+    best_recent_name, best_recent = max(((m, recent_results[m]) for m in common),
+                                        key=lambda x: x[1]['top1_rate'])
+    best_older_name, best_older = max(((m, older_results[m]) for m in common),
+                                      key=lambda x: x[1]['top1_rate'])
+
+    underpowered = (n_recent < 5 or n_older < 5)
+    if underpowered:
+        verdict = 'inconclusive at this sample size'
+    elif avg_recent_top1 - avg_older_top1 >= 5:
+        verdict = 'noticeably higher'
+    elif avg_older_top1 - avg_recent_top1 >= 5:
+        verdict = 'noticeably lower'
+    else:
+        verdict = 'about the same'
+
+    lines.append(r'\paragraph{Summary.} ')
+    lines.append(f'Recent batch average top-1 ID rate is '
+                 f'\\textbf{{{avg_recent_top1:.0f}\\%}} '
+                 f'(top-3 agreement {avg_recent_top3:.0f}\\%), vs.\\ '
+                 f'\\textbf{{{avg_older_top1:.0f}\\%}} '
+                 f'(top-3 agreement {avg_older_top3:.0f}\\%) for the older batch '
+                 f'--- {verdict}. '
+                 f'Best recent metric: {escape_tex(best_recent_name)} '
+                 f'({best_recent["top1_rate"]:.0f}\\% top-1). '
+                 f'Best older metric: {escape_tex(best_older_name)} '
+                 f'({best_older["top1_rate"]:.0f}\\% top-1).')
+    lines.append('')
+
+    # Safe elimination side-by-side at 50% cut
+    if recent_elim and older_elim:
+        lines.append(r'\paragraph{Safe elimination at 50\% cut.} '
+                     'How often all three human top-3 picks survive cutting half the '
+                     'candidates by each metric:')
+        lines.append(r'\vspace{0.3em}')
+        lines.append(r'\begin{center}')
+        lines.append(r'\small')
+        lines.append(r'\begin{tabular}{lcc}')
+        lines.append(r'\toprule')
+        lines.append(r'\textbf{Metric} & \textbf{Recent} & \textbf{Older} \\')
+        lines.append(r'\midrule')
+        # Sort by recent safe rate
+        elim_common = [m for m in common
+                       if m in recent_elim and m in older_elim
+                       and 0.50 in recent_elim[m] and 0.50 in older_elim[m]]
+        elim_common.sort(
+            key=lambda m: recent_elim[m][0.50]['safe_rate'], reverse=True)
+        for name in elim_common[:10]:
+            r_rate = recent_elim[name][0.50]['safe_rate']
+            o_rate = older_elim[name][0.50]['safe_rate']
+            inv = ' (inv.)' if recent_elim[name][0.50]['inverted'] else ''
+            disp = escape_tex(name) + inv
+            delta = r_rate - o_rate
+            color = ''
+            if delta >= 15:
+                color = r'\rowcolor{toprow} '
+            elif delta <= -15:
+                color = r'\rowcolor{botrow} '
+            lines.append(f'{color}{disp} & {r_rate:.0f}\\% & {o_rate:.0f}\\% \\\\')
+        lines.append(r'\bottomrule')
+        lines.append(r'\end{tabular}')
+        lines.append(r'\end{center}')
+        lines.append('')
+
+    return '\n'.join(lines)
+
+
 def generate_report(training_results, finetuning_results, clusters,
                     elim_training, elim_finetuning,
                     training_metric_names, finetuning_metric_names,
                     n_training, n_finetuning, n_total,
-                    output_path):
+                    output_path,
+                    recent_results=None, older_results=None,
+                    recent_elim=None, older_elim=None,
+                    n_recent=0, n_older=0):
     """Generate the full LaTeX report."""
 
     # Determine best metrics for findings
@@ -484,6 +657,14 @@ For reference, chance-level performance for random selection: training tiles ($\
         lines.append(generate_results_table(
             training_results, training_metric_names,
             'Training Tiles', n_training, 37))
+
+    # Recent vs Older training-tile comparison
+    rvo = generate_recent_vs_older_section(
+        recent_results, older_results, recent_elim, older_elim,
+        training_metric_names, n_recent, n_older,
+    ) if recent_results and older_results else ''
+    if rvo:
+        lines.append(rvo)
 
     # Finetuning results
     if finetuning_results:
@@ -725,6 +906,20 @@ def main():
     elim_training = analyze_elimination(training, training_names) if training else {}
     elim_finetuning = analyze_elimination(finetuning, finetuning_names) if finetuning else {}
 
+    # Date split for training tiles: is the recent batch more conclusive?
+    training_recent = [p for p in training if is_recent(p)]
+    training_older = [p for p in training if not is_recent(p)]
+    print(f'\nTraining-tile date split: '
+          f'{len(training_recent)} on/after {RECENT_CUTOFF}, '
+          f'{len(training_older)} before')
+    recent_results = older_results = None
+    recent_elim = older_elim = {}
+    if training_recent and training_older:
+        recent_results, _recent_names = analyze_files(training_recent)
+        older_results, _older_names = analyze_files(training_older)
+        recent_elim = analyze_elimination(training_recent, training_names)
+        older_elim = analyze_elimination(training_older, training_names)
+
     # Print summary
     print('\n=== TRAINING TILES ===')
     if training_results:
@@ -770,6 +965,9 @@ def main():
         finetuning_metric_names=finetuning_names or [],
         n_training=len(training), n_finetuning=len(finetuning), n_total=len(parsed),
         output_path=output,
+        recent_results=recent_results, older_results=older_results,
+        recent_elim=recent_elim, older_elim=older_elim,
+        n_recent=len(training_recent), n_older=len(training_older),
     )
 
     if args.compile:

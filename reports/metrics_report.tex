@@ -49,6 +49,68 @@ For reference, chance-level performance for random selection: training tiles ($\
 \end{tabular}
 \end{center}
 
+\section{Training Tiles: Recent vs.\ Older Data}
+
+Training-tile tournaments split by date: \textbf{1 recent} (on/after 2026-04-01) vs.\ \textbf{13 older} (before). The recent batch was collected with the updated comparison tool (label-corner masking, finer ROI, pre-filter) — does this give more conclusive metric performance?
+
+\textbf{Caveat: small sample.} 
+The smaller side has only 1 tournament, so single-tournament noise dominates the percentages below. Treat the table as a sanity check, not a verdict; collecting another 5--10 training-tile tournaments with the updated tool would make the comparison statistically meaningful.
+
+\vspace{0.5em}
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+ & \multicolumn{2}{c}{\textbf{Recent (1)}} & \multicolumn{2}{c}{\textbf{Older (13)}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+\textbf{Metric} & Top-3 & Top-1 & Top-3 & Top-1 \\
+\midrule
+Brenner & 0\% & 0\% & 15\% & 8\% \\
+DCTS & 0\% & 0\% & 18\% & 8\% \\
+HF Energy & 0\% & 0\% & 21\% & 8\% \\
+Hist. Entropy & 0\% & 0\% & 26\% & 8\% \\
+Kurtosis & 0\% & 0\% & 18\% & 8\% \\
+Laplacian Var & 33\% & 0\% & 26\% & 8\% \\
+Local Std & 33\% & 0\% & 31\% & 8\% \\
+\rowcolor{botrow} NDCTBE & 0\% & 0\% & 18\% & 15\% \\
+NHWTSE & 0\% & 0\% & 3\% & 0\% \\
+Norm. Var. & 0\% & 0\% & 21\% & 8\% \\
+SML & 33\% & 0\% & 23\% & 8\% \\
+\rowcolor{botrow} Spec. Slope & 0\% & 0\% & 8\% & 15\% \\
+Spec. Struct. & 0\% & 0\% & 26\% & 8\% \\
+\rowcolor{botrow} Tenengrad & 33\% & 0\% & 28\% & 15\% \\
+Vollath F4 & 0\% & 0\% & 15\% & 8\% \\
+Vollath F5 & 0\% & 0\% & 28\% & 8\% \\
+Wavelet E.R. & 0\% & 0\% & 28\% & 8\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Summary.} 
+Recent batch average top-1 ID rate is \textbf{0\%} (top-3 agreement 8\%), vs.\ \textbf{9\%} (top-3 agreement 21\%) for the older batch --- inconclusive at this sample size. Best recent metric: Brenner (0\% top-1). Best older metric: NDCTBE (15\% top-1).
+
+\paragraph{Safe elimination at 50\% cut.} How often all three human top-3 picks survive cutting half the candidates by each metric:
+\vspace{0.3em}
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{Recent} & \textbf{Older} \\
+\midrule
+\rowcolor{toprow} Kurtosis (inv.) & 100\% & 54\% \\
+\rowcolor{toprow} Norm. Var. & 100\% & 69\% \\
+\rowcolor{toprow} Wavelet E.R. & 100\% & 85\% \\
+\rowcolor{botrow} Brenner & 0\% & 85\% \\
+\rowcolor{botrow} DCTS & 0\% & 54\% \\
+\rowcolor{botrow} HF Energy & 0\% & 69\% \\
+\rowcolor{botrow} Hist. Entropy & 0\% & 77\% \\
+\rowcolor{botrow} Laplacian Var & 0\% & 77\% \\
+\rowcolor{botrow} Local Std & 0\% & 77\% \\
+\rowcolor{botrow} NDCTBE & 0\% & 54\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
 \section{Results: Finetuning (48 tournaments)}
 
 \vspace{0.5em}
