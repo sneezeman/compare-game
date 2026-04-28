@@ -409,10 +409,14 @@ def generate_elimination_table(elim_results, metric_names, title, n_files):
     if not elim_results:
         return ''
 
-    # Sort by safe rate at 50% elimination
+    # Primary: Cut 50% safe rate desc. Tiebreakers: Cut 75% desc then
+    # Cut 25% desc — a metric that survives a more aggressive cut is more
+    # useful, so prefer it when the headline (50%) number is tied.
+    def _safe(name, t):
+        return elim_results.get(name, {}).get(t, {}).get('safe_rate', 0)
     sorted_metrics = sorted(
         [(name, elim_results[name]) for name in metric_names if name in elim_results],
-        key=lambda x: x[1].get(0.50, {}).get('safe_rate', 0),
+        key=lambda x: (_safe(x[0], 0.50), _safe(x[0], 0.75), _safe(x[0], 0.25)),
         reverse=True,
     )
 
@@ -582,12 +586,17 @@ def generate_recent_vs_older_section(recent_results, older_results,
         lines.append(r'\toprule')
         lines.append(r'\textbf{Metric} & \textbf{Recent} & \textbf{Older} \\')
         lines.append(r'\midrule')
-        # Sort by recent safe rate
+        # Sort by recent safe rate at 50% (primary), 75% (tiebreak), 25% (last)
         elim_common = [m for m in common
                        if m in recent_elim and m in older_elim
                        and 0.50 in recent_elim[m] and 0.50 in older_elim[m]]
+
+        def _r_safe(m, t):
+            return recent_elim.get(m, {}).get(t, {}).get('safe_rate', 0)
         elim_common.sort(
-            key=lambda m: recent_elim[m][0.50]['safe_rate'], reverse=True)
+            key=lambda m: (_r_safe(m, 0.50), _r_safe(m, 0.75), _r_safe(m, 0.25)),
+            reverse=True,
+        )
         for name in elim_common[:10]:
             r_rate = recent_elim[name][0.50]['safe_rate']
             o_rate = older_elim[name][0.50]['safe_rate']

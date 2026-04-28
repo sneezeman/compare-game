@@ -116,15 +116,15 @@ Recent batch average top-1 ID rate is \textbf{49\%} (top-3 agreement 37\%), vs.\
 \textbf{Metric} & \textbf{Recent} & \textbf{Older} \\
 \midrule
 \rowcolor{toprow} Kurtosis (inv.) & 100\% & 54\% \\
-SML & 75\% & 69\% \\
 Wavelet E.R. & 75\% & 85\% \\
+SML & 75\% & 69\% \\
 \rowcolor{botrow} HF Energy & 50\% & 69\% \\
-\rowcolor{botrow} Laplacian Var & 50\% & 77\% \\
 \rowcolor{botrow} Local Std & 50\% & 77\% \\
+\rowcolor{botrow} Hist. Entropy & 50\% & 77\% \\
+\rowcolor{botrow} Spec. Struct. (inv.) & 50\% & 69\% \\
+\rowcolor{botrow} Laplacian Var & 50\% & 77\% \\
 \rowcolor{botrow} Tenengrad & 50\% & 85\% \\
 \rowcolor{botrow} Brenner & 50\% & 85\% \\
-\rowcolor{botrow} Hist. Entropy & 50\% & 77\% \\
-\rowcolor{botrow} Norm. Var. & 50\% & 69\% \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -178,13 +178,13 @@ throw away half the candidates by that metric without losing any human favorite.
 1 & Tenengrad & 95\% & 70\% & 34\% \\
 2 & Laplacian Var & 92\% & 69\% & 26\% \\
 3 & Brenner & 92\% & 68\% & 31\% \\
-4 & SML & 92\% & 68\% & 28\% \\
-5 & Wavelet E.R. & 92\% & 68\% & 31\% \\
+4 & Wavelet E.R. & 92\% & 68\% & 31\% \\
+5 & SML & 92\% & 68\% & 28\% \\
 6 & LoG Response & 95\% & 66\% & 27\% \\
 7 & Local Std & 95\% & 65\% & 30\% \\
 8 & HF Energy & 89\% & 64\% & 28\% \\
-9 & Spec. Struct. (inv.) & 93\% & 62\% & 27\% \\
-10 & Vollath F4 & 92\% & 62\% & 31\% \\
+9 & Vollath F4 & 92\% & 62\% & 31\% \\
+10 & Spec. Struct. (inv.) & 93\% & 62\% & 27\% \\
 \rowcolor{botrow} 11 & Hist. Entropy & 86\% & 53\% & 12\% \\
 \rowcolor{botrow} 12 & Contrast Con. & 70\% & 45\% & 15\% \\
 \rowcolor{botrow} 13 & Vollath F5 & 73\% & 45\% & 12\% \\
@@ -212,19 +212,19 @@ throw away half the candidates by that metric without losing any human favorite.
 \toprule
 \textbf{\#} & \textbf{Metric} & \textbf{Cut 25\%} & \textbf{Cut 50\%} & \textbf{Cut 75\%} \\
 \midrule
-\rowcolor{midrow} 1 & Vollath F4 & 88\% & 82\% & 35\% \\
-\rowcolor{midrow} 2 & Wavelet E.R. & 94\% & 82\% & 59\% \\
+\rowcolor{midrow} 1 & Wavelet E.R. & 94\% & 82\% & 59\% \\
+\rowcolor{midrow} 2 & Vollath F4 & 88\% & 82\% & 35\% \\
 \rowcolor{midrow} 3 & Brenner & 100\% & 76\% & 41\% \\
 \rowcolor{midrow} 4 & Tenengrad & 100\% & 76\% & 41\% \\
-5 & Hist. Entropy & 100\% & 71\% & 41\% \\
-6 & Laplacian Var & 94\% & 71\% & 41\% \\
-7 & Local Std & 100\% & 71\% & 59\% \\
+5 & Local Std & 100\% & 71\% & 59\% \\
+6 & Hist. Entropy & 100\% & 71\% & 41\% \\
+7 & Laplacian Var & 94\% & 71\% & 41\% \\
 8 & SML & 94\% & 71\% & 41\% \\
 9 & HF Energy & 100\% & 65\% & 53\% \\
-10 & Kurtosis (inv.) & 82\% & 65\% & 24\% \\
+10 & Spec. Struct. (inv.) & 100\% & 65\% & 35\% \\
 11 & Norm. Var. & 88\% & 65\% & 24\% \\
-12 & Spec. Struct. (inv.) & 100\% & 65\% & 35\% \\
-13 & Vollath F5 & 88\% & 65\% & 24\% \\
+12 & Vollath F5 & 88\% & 65\% & 24\% \\
+13 & Kurtosis (inv.) & 82\% & 65\% & 24\% \\
 \rowcolor{botrow} 14 & DCTS & 82\% & 53\% & 24\% \\
 \rowcolor{botrow} 15 & NDCTBE & 82\% & 53\% & 12\% \\
 \rowcolor{botrow} 16 & NHWTSE & 88\% & 47\% & 6\% \\
