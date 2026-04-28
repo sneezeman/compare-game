@@ -409,14 +409,14 @@ def generate_elimination_table(elim_results, metric_names, title, n_files):
     if not elim_results:
         return ''
 
-    # Primary: Cut 50% safe rate desc. Tiebreakers: Cut 75% desc then
-    # Cut 25% desc — a metric that survives a more aggressive cut is more
-    # useful, so prefer it when the headline (50%) number is tied.
+    # Sort by Cut 75% desc, then Cut 50% desc, then Cut 25% desc.
+    # A metric that survives the most aggressive cut while keeping the
+    # human top-3 is the most useful — that's the sort the user wants.
     def _safe(name, t):
         return elim_results.get(name, {}).get(t, {}).get('safe_rate', 0)
     sorted_metrics = sorted(
         [(name, elim_results[name]) for name in metric_names if name in elim_results],
-        key=lambda x: (_safe(x[0], 0.50), _safe(x[0], 0.75), _safe(x[0], 0.25)),
+        key=lambda x: (_safe(x[0], 0.75), _safe(x[0], 0.50), _safe(x[0], 0.25)),
         reverse=True,
     )
 
@@ -448,12 +448,14 @@ def generate_elimination_table(elim_results, metric_names, title, n_files):
             else:
                 cols.append('---')
 
-        rate_50 = thresholds.get(0.50, {}).get('safe_rate', 0)
-        if rate_50 >= 90:
+        # Row color is anchored on Cut 75% (the primary sort key), since
+        # surviving the most aggressive cut is the headline outcome.
+        rate_75 = thresholds.get(0.75, {}).get('safe_rate', 0)
+        if rate_75 >= 50:
             lines.append(f'\\rowcolor{{toprow}} {i+1} & {disp_name} & {" & ".join(cols)} \\\\')
-        elif rate_50 >= 75:
+        elif rate_75 >= 30:
             lines.append(f'\\rowcolor{{midrow}} {i+1} & {disp_name} & {" & ".join(cols)} \\\\')
-        elif rate_50 < 60:
+        elif rate_75 < 15:
             lines.append(f'\\rowcolor{{botrow}} {i+1} & {disp_name} & {" & ".join(cols)} \\\\')
         else:
             lines.append(f'{i+1} & {disp_name} & {" & ".join(cols)} \\\\')
@@ -586,7 +588,7 @@ def generate_recent_vs_older_section(recent_results, older_results,
         lines.append(r'\toprule')
         lines.append(r'\textbf{Metric} & \textbf{Recent} & \textbf{Older} \\')
         lines.append(r'\midrule')
-        # Sort by recent safe rate at 50% (primary), 75% (tiebreak), 25% (last)
+        # Sort by recent safe rate at 75% (primary), 50% (tiebreak), 25%
         elim_common = [m for m in common
                        if m in recent_elim and m in older_elim
                        and 0.50 in recent_elim[m] and 0.50 in older_elim[m]]
@@ -594,7 +596,7 @@ def generate_recent_vs_older_section(recent_results, older_results,
         def _r_safe(m, t):
             return recent_elim.get(m, {}).get(t, {}).get('safe_rate', 0)
         elim_common.sort(
-            key=lambda m: (_r_safe(m, 0.50), _r_safe(m, 0.75), _r_safe(m, 0.25)),
+            key=lambda m: (_r_safe(m, 0.75), _r_safe(m, 0.50), _r_safe(m, 0.25)),
             reverse=True,
         )
         for name in elim_common[:10]:
