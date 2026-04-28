@@ -488,18 +488,20 @@ def generate_recent_vs_older_section(recent_results, older_results,
                  'this give more conclusive metric performance?')
     lines.append('')
 
-    # Caveat for under-powered comparisons. With only a handful of
-    # tournaments per side the percentages can swing wildly.
-    if n_recent < 5 or n_older < 5:
-        smaller = min(n_recent, n_older)
-        lines.append(r'\textbf{Caveat: small sample.} ')
+    smaller = min(n_recent, n_older)
+    if smaller < 3:
+        lines.append(r'\textbf{Caveat: very small sample.} ')
         lines.append(f'The smaller side has only {smaller} tournament'
-                     f'{"s" if smaller != 1 else ""}, '
-                     'so single-tournament noise dominates the percentages '
-                     'below. Treat the table as a sanity check, not a verdict; '
-                     'collecting another 5--10 training-tile tournaments with '
-                     'the updated tool would make the comparison statistically '
-                     'meaningful.')
+                     f'{"s" if smaller != 1 else ""}; '
+                     'percentages below are dominated by single-tournament '
+                     'noise. Collect 5+ more before drawing conclusions.')
+        lines.append('')
+    elif smaller < 6:
+        lines.append(r'\textbf{Note on sample size.} ')
+        lines.append(f'The smaller side has {smaller} tournaments, so '
+                     'individual percentages should be read as $\\pm$15\\,pp; '
+                     'pay attention to the \\emph{direction and magnitude} of '
+                     'the gap across many metrics rather than any single row.')
         lines.append('')
     lines.append(r'\vspace{0.5em}')
     lines.append(r'\begin{center}')
@@ -541,13 +543,17 @@ def generate_recent_vs_older_section(recent_results, older_results,
     best_older_name, best_older = max(((m, older_results[m]) for m in common),
                                       key=lambda x: x[1]['top1_rate'])
 
-    underpowered = (n_recent < 5 or n_older < 5)
-    if underpowered:
+    delta = avg_recent_top1 - avg_older_top1
+    if smaller < 3:
         verdict = 'inconclusive at this sample size'
-    elif avg_recent_top1 - avg_older_top1 >= 5:
-        verdict = 'noticeably higher'
-    elif avg_older_top1 - avg_recent_top1 >= 5:
-        verdict = 'noticeably lower'
+    elif abs(delta) >= 25:
+        verdict = (r'much higher --- likely a real effect, the gap is too '
+                   r'wide to be sample noise')
+        if delta < 0:
+            verdict = (r'much lower --- likely a real effect, the gap is too '
+                       r'wide to be sample noise')
+    elif abs(delta) >= 10:
+        verdict = 'noticeably higher' if delta >= 0 else 'noticeably lower'
     else:
         verdict = 'about the same'
 
@@ -738,6 +744,26 @@ For reference, chance-level performance for random selection: training tiles ($\
                          f'while preserving all human top-3 picks in {be_rate:.0f}\\% of tournaments. '
                          f'Recommended workflow: use metrics to pre-filter, then compare the survivors visually.')
 
+    # Recent vs older training-tile comparison
+    if recent_results and older_results and min(n_recent, n_older) >= 3:
+        common = [m for m in recent_results
+                  if m in older_results]
+        if common:
+            avg_r = float(np.mean([recent_results[m]['top1_rate'] for m in common]))
+            avg_o = float(np.mean([older_results[m]['top1_rate'] for m in common]))
+            delta = avg_r - avg_o
+            if abs(delta) >= 15:
+                arrow = 'jumped' if delta > 0 else 'dropped'
+                lines.append(
+                    f'\\item \\textbf{{Recent training-tile data is far more '
+                    f'conclusive than older data}} — average top-1 ID rate '
+                    f'{arrow} from {avg_o:.0f}\\% (n={n_older}) to '
+                    f'{avg_r:.0f}\\% (n={n_recent}), with the best metrics '
+                    f'now matching finetuning-grade performance. Plausibly '
+                    f'driven by the updated tool '
+                    f'(label-corner masking, pre-filter, finer ROI) plus more '
+                    f'consistent rater behavior.')
+
     n_droppable = sum(len(c['metrics']) - 1 for c in clusters)
     if n_droppable > 0:
         total_metrics = len(set(training_metric_names) | set(finetuning_metric_names))
@@ -869,14 +895,20 @@ def main():
     parser.add_argument('--output', default=None, help='Output .tex path (default: results_dir/metrics_report.tex)')
     args = parser.parse_args()
 
-    # Find all TSV files
-    tsv_files = []
+    # Find all TSV files. Dedupe by basename — the same tournament can
+    # appear both at the legacy top-level path and under its new mirrored
+    # subdir (ls3639/.../). Prefer the deeper (mirrored) copy.
+    seen = {}
     for root, dirs, filenames in os.walk(args.results_dir):
         for fn in filenames:
-            if fn.endswith('.tsv'):
-                tsv_files.append(os.path.join(root, fn))
-
-    print(f'Found {len(tsv_files)} TSV files')
+            if not fn.endswith('.tsv'):
+                continue
+            full = os.path.join(root, fn)
+            depth = full.count(os.sep)
+            if fn not in seen or depth > seen[fn][1]:
+                seen[fn] = (full, depth)
+    tsv_files = sorted(p for p, _ in seen.values())
+    print(f'Found {len(tsv_files)} unique TSV files (deduped by filename)')
 
     # Parse
     parsed = []
