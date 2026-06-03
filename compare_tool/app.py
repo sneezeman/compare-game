@@ -17,9 +17,11 @@ from datetime import datetime
 import glob as glob_mod
 
 import numpy as np
-from flask import Flask, g, jsonify, render_template, request, send_file
+from flask import (Flask, Response, g, jsonify, render_template, request,
+                   send_file)
 from PIL import Image
 
+from eval_export import build_csv, build_sh, collect_eval_rows
 from gif_loader import (compute_label_exclusion, compute_variability_map,
                         extract_frames, suggest_rois,
                         variability_to_heatmap_rgba)
@@ -374,6 +376,50 @@ def get_past_result(filename):
                 return jsonify(error='Access denied'), 403
     return send_file(path, mimetype='text/tab-separated-values',
                      as_attachment=True, download_name=os.path.basename(filename))
+
+
+def _accessible_results():
+    """Past results visible to the current user (mirrors list_past_results)."""
+    username = getattr(g, 'username', None)
+    if not username:
+        return list(past_results)
+    return [r for r in past_results
+            if not r.get('gifs')
+            or any(_user_can_access(username, gif) for gif in r.get('gifs', []))]
+
+
+def _selected_filenames(exp_ids):
+    """Map requested experiment ids to their GIF filenames, or None for 'all'."""
+    if not exp_ids:
+        return None
+    names = set()
+    for eid in exp_ids:
+        exp = experiments.get(eid)
+        if exp and 'filename' in exp:
+            names.add(exp['filename'])
+    return names
+
+
+def _eval_rows_for_request():
+    data = request.get_json(silent=True) or {}
+    selected = _selected_filenames(data.get('exp_ids'))
+    return collect_eval_rows(_accessible_results(), selected_filenames=selected)
+
+
+@app.route('/api/export/eval-sheet', methods=['POST'])
+def export_eval_sheet():
+    """CSV of selected finetuning winners (tile, metadata, finetune tile, epoch)."""
+    csv_text = build_csv(_eval_rows_for_request())
+    return Response(csv_text, mimetype='text/csv', headers={
+        'Content-Disposition': 'attachment; filename="eval_selection.csv"'})
+
+
+@app.route('/api/export/eval-script', methods=['POST'])
+def export_eval_script():
+    """One &&-chained .sh that rewrites eval_manual.sh and sbatches it per row."""
+    sh_text = build_sh(_eval_rows_for_request())
+    return Response(sh_text, mimetype='text/x-shellscript', headers={
+        'Content-Disposition': 'attachment; filename="eval_selection.sh"'})
 
 
 @app.route('/api/frame/<exp_id>/<int:epoch>')

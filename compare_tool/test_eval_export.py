@@ -1,0 +1,115 @@
+"""Unit tests for the eval-export helpers (pure, no Flask)."""
+
+from eval_export import collect_eval_rows, build_csv, build_sh
+
+# A finetune winner GIF: target T001 finetuned from T000 starting at epoch 140.
+FT = ('ls3639/NM0029/finetune/'
+      'NM0029_HT_100nm_T001_0001_rec__from_NM0029_HT_100nm_T000_0001_rec__140/'
+      'all_epochs_view2_141-150.gif')
+# A second finetune of the same target from a different checkpoint (T014@170).
+FT2 = ('ls3639/NM0029/finetune/'
+       'NM0029_HT_100nm_T001_0001_rec__from_NM0029_HT_100nm_T014_0001_rec__170/'
+       'all_epochs_view2_171-180.gif')
+# A plain training tile (no `_from_` checkpoint).
+TR = 'ls3639/NM0029/NM0029_HT_100nm_T000_0001_rec_/all_epochs_view0_0-45.gif'
+
+
+def _result(winner_gif, ep, gifs=None, extra=''):
+    top3 = f'{winner_gif} Ep.{ep}'
+    if extra:
+        top3 += ', ' + extra
+    return {'gifs': gifs or [winner_gif], 'top3': top3}
+
+
+def test_finetune_winner_fields():
+    (r,) = collect_eval_rows([_result(FT, 142)])
+    assert r.tile == 'T001'
+    assert r.full_metadata == 'NM0029_HT_100nm_T001_0001_rec_'
+    assert r.finetune_tile == 'T000'
+    assert r.selected_epoch == 142
+    assert r.full_checkpoint_metadata == 'NM0029_HT_100nm_T000_0001_rec_'
+    assert r.finetune_epoch == 140
+
+
+def test_two_digit_tile_no_subid():
+    gif = ('ls3543/finetune/S1M_RH_rot_HTb_100nm_T01_rec__from_'
+           'S1M_RH_rot_HTb_100nm_T35_rec__195/all_epochs_view0_196-205.gif')
+    (r,) = collect_eval_rows([_result(gif, 198)])
+    assert r.tile == 'T01'
+    assert r.full_metadata == 'S1M_RH_rot_HTb_100nm_T01_rec_'
+    assert r.finetune_tile == 'T35'
+    assert r.full_checkpoint_metadata == 'S1M_RH_rot_HTb_100nm_T35_rec_'
+    assert r.selected_epoch == 198
+    assert r.finetune_epoch == 195
+
+
+def test_tile_token_with_resolution_segment():
+    # Tile not directly before _rec_: `T03_050nm_rec_` (A033 naming).
+    gif = ('A033/finetune/A033_T03_050nm_rec__from_A033_T02_050nm_rec__170/'
+           'all_epochs_view0_171-180.gif')
+    (r,) = collect_eval_rows([_result(gif, 180)])
+    assert r.tile == 'T03'
+    assert r.finetune_tile == 'T02'
+    assert r.full_metadata == 'A033_T03_050nm_rec_'
+    assert r.finetune_epoch == 170
+
+
+def test_tile_token_ignores_HT_prefix():
+    # `HT` must not be read as a tile; the real tile is T002.
+    gif = ('NM0024/finetune/NM0024_HT_090nm_T002_0001_rec__from_'
+           'NM0024_HT_090nm_T004_0001_rec__115/all_epochs_view1_116-125.gif')
+    (r,) = collect_eval_rows([_result(gif, 123)])
+    assert r.tile == 'T002'
+    assert r.finetune_tile == 'T004'
+
+
+def test_training_tile_skipped():
+    assert collect_eval_rows([_result(TR, 30)]) == []
+
+
+def test_multi_gif_winner_drives_row():
+    # Winner is FT2 even though FT is listed first in gifs.
+    res = {'gifs': [FT, FT2], 'top3': f'{FT2} Ep.175, {FT} Ep.142'}
+    (r,) = collect_eval_rows([res])
+    assert r.finetune_tile == 'T014'
+    assert r.selected_epoch == 175
+    assert r.finetune_epoch == 170
+
+
+def test_subset_filter():
+    assert collect_eval_rows([_result(FT, 142)],
+                             selected_filenames={'other.gif'}) == []
+    assert len(collect_eval_rows([_result(FT, 142)],
+                                 selected_filenames={FT})) == 1
+
+
+def test_ordering_deterministic():
+    other = ('x/finetune/AA_T002_rec__from_AA_T000_rec__10/'
+             'all_epochs_view0_11-20.gif')
+    rows = collect_eval_rows([_result(FT, 150), _result(other, 12)])
+    metas = [r.full_metadata for r in rows]
+    assert metas == sorted(metas)
+
+
+def test_build_csv_header_and_row():
+    csv_text = build_csv(collect_eval_rows([_result(FT, 142)]))
+    lines = csv_text.strip().splitlines()
+    assert lines[0] == 'tile,full_metadata_name,selected_finetuning_tile,selected_epoch'
+    assert lines[1] == 'T001,NM0029_HT_100nm_T001_0001_rec_,T000,142'
+
+
+def test_build_sh_chained_and_sbatch():
+    sh = build_sh(collect_eval_rows([_result(FT, 142), _result(FT2, 175)]))
+    assert sh.startswith('#!/bin/bash')
+    assert sh.count('sbatch eval_manual.sh') == 2
+    assert 'metadata="NM0029_HT_100nm_T001_0001_rec_"' in sh
+    assert 'checkpoint_metadata="NM0029_HT_100nm_T000_0001_rec_"' in sh
+    assert 'finetune_epoch="170"' in sh
+    # Single &&-chain: every line except the last continues with ` && \`.
+    body = [ln for ln in sh.splitlines() if ln and not ln.startswith('#!')]
+    assert all(ln.rstrip().endswith('&& \\') for ln in body[:-1])
+    assert not body[-1].rstrip().endswith('\\')
+
+
+def test_empty_sh_is_just_shebang():
+    assert build_sh([]).strip() == '#!/bin/bash'

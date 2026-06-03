@@ -25,6 +25,12 @@
             </button>
         </div>
 
+        <div id="export-bar" class="center-row" style="margin-top: 14px; display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <button class="btn btn-secondary" onclick="exportEval('sheet')">Export eval sheet (CSV)</button>
+            <button class="btn btn-secondary" onclick="exportEval('script')">Export eval script (.sh)</button>
+            <span class="hint" style="color: #888; font-size: 0.85em;">No selection &rarr; all processed finetuning results</span>
+        </div>
+
         <div id="past-results-section" style="display: none;">
             <h3 class="toggle-header" onclick="togglePastResults()" style="cursor: pointer; user-select: none;">
                 <span id="past-results-toggle">&#9654;</span> Past Results

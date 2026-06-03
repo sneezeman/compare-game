@@ -224,6 +224,37 @@ async function loadPreloaded() {
     }
 }
 
+// Export eval sheet (CSV) or sbatch script (.sh) for the checked experiments,
+// or for all processed finetuning results when nothing is checked.
+async function exportEval(kind) {
+    const expIds = Array.from(document.querySelectorAll('.exp-checkbox:checked'))
+        .map(cb => cb.dataset.expId);
+    const endpoint = kind === 'sheet' ? 'eval-sheet' : 'eval-script';
+    const fname = kind === 'sheet' ? 'eval_selection.csv' : 'eval_selection.sh';
+    try {
+        const resp = await fetch(`/api/export/${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ exp_ids: expIds }),
+        });
+        if (!resp.ok) {
+            alert(`Export failed (${resp.status})`);
+            return;
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fname;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Export error: ' + e.message);
+    }
+}
+
 function togglePastResults() {
     const list = document.getElementById('past-results-list');
     const toggle = document.getElementById('past-results-toggle');
