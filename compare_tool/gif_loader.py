@@ -86,6 +86,40 @@ def compute_label_exclusion(W, H):
     return (mask_x, 0, mask_w, mask_h)
 
 
+def detect_label_present(frame, box, bright=0.90, dark=0.15, min_pixels=15):
+    """Detect a burned-in label inside `box` of a single frame (Approach A).
+
+    The generator draws near-white text (≈1.0) wrapped in a black outline
+    (≈0.0). The signature is bright pixels directly adjacent to near-black
+    ones. Denoised tomography content in that corner has essentially no
+    near-black pixels, so this separates label from image content cleanly
+    (empirically ~200 hits on a real label vs 0 on real content).
+
+    frame: 2D float32 in [0, 1]. box: (x, y, w, h). Returns bool.
+    """
+    x, y, w, h = box
+    H, W = frame.shape
+    x0, y0 = max(0, int(x)), max(0, int(y))
+    x1, y1 = min(W, int(x + w)), min(H, int(y + h))
+    if x1 <= x0 or y1 <= y0:
+        return False
+
+    region = frame[y0:y1, x0:x1]
+    bright_mask = region > bright
+    dark_mask = region < dark
+    if not bright_mask.any() or not dark_mask.any():
+        return False
+
+    # True where a pixel has at least one near-black 4-neighbor.
+    has_dark_neighbor = np.zeros_like(dark_mask)
+    has_dark_neighbor[1:, :] |= dark_mask[:-1, :]
+    has_dark_neighbor[:-1, :] |= dark_mask[1:, :]
+    has_dark_neighbor[:, 1:] |= dark_mask[:, :-1]
+    has_dark_neighbor[:, :-1] |= dark_mask[:, 1:]
+
+    return int(np.count_nonzero(bright_mask & has_dark_neighbor)) >= min_pixels
+
+
 def compute_variability_map(frames, mask_label_corner=True):
     """Compute pixel-wise standard deviation across frames.
     Returns a 2D array normalized to [0, 1]. The top-right label corner is

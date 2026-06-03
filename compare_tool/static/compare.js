@@ -680,8 +680,17 @@ async function loadROISuggestions(expId) {
     try {
         const resp = await fetch(`/api/roi-suggestions/${expId}`);
         const data = await resp.json();
-        // Stash exclusion box so the canvas overlay & drag clamp can use it
+        // The label box geometry is always supplied; whether it's *applied*
+        // depends on detection (data.exclusion is null when no label was found).
+        state.labelBox = data.label_box || data.exclusion || null;
         state.roiExclusion = data.exclusion || null;
+        // Default the manual toggle to the detection verdict; the user can flip
+        // it to override a wrong detection (toggleLabelExclusion re-applies it).
+        const toggle = document.getElementById('label-exclude-toggle');
+        if (toggle) {
+            toggle.checked = !!data.label_detected;
+            toggle.disabled = !state.labelBox;
+        }
         // Re-render the exclusion overlay now that we have the box
         drawROIExclusionOverlay();
         if (!data.suggestions || data.suggestions.length === 0) {
@@ -698,6 +707,23 @@ async function loadROISuggestions(expId) {
         container.innerHTML = html;
     } catch (e) {
         container.innerHTML = '';
+    }
+}
+
+// Manual override for the corner-label exclusion. Detection sets the initial
+// state; flipping this re-imposes (checked) or lifts (unchecked) the restriction.
+function toggleLabelExclusion() {
+    const toggle = document.getElementById('label-exclude-toggle');
+    state.roiExclusion = (toggle && toggle.checked) ? state.labelBox : null;
+    drawROIExclusionOverlay();
+    // If a selection is active and now overlaps the re-imposed box, re-clamp it.
+    if (state.roiExclusion && state.roi) {
+        const [x, y, w, h] = state.roi.split(',').map(Number);
+        const c = clampRectAgainstExclusion(x, y, w, h);
+        if ((c.x !== x || c.y !== y || c.w !== w || c.h !== h)
+            && c.w > 0 && c.h > 0) {
+            applyROISuggestion(c.x, c.y, c.w, c.h);
+        }
     }
 }
 

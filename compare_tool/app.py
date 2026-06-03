@@ -23,7 +23,7 @@ from PIL import Image
 
 from eval_export import build_csv, build_sh, collect_eval_rows
 from gif_loader import (compute_label_exclusion, compute_variability_map,
-                        extract_frames, suggest_rois,
+                        detect_label_present, extract_frames, suggest_rois,
                         variability_to_heatmap_rgba)
 from metrics import compute_all, compute_metric_zscores, METRIC_GROUPS, ELIMINATION_METRICS
 from tournament import Tournament
@@ -495,10 +495,20 @@ def get_roi_suggestions(exp_id):
 
     H, W = exp['variability'].shape
     ex, ey, ew, eh = compute_label_exclusion(W, H)
-    rois = suggest_rois(exp['variability'],
-                        exclusion_box=(ex, ey, ew, eh))
-    return jsonify(suggestions=rois,
-                   exclusion={'x': ex, 'y': ey, 'w': ew, 'h': eh})
+    label_present = exp.get('label_present', True)
+    # Only restrict the corner when a label was actually detected. When absent,
+    # the corner is free for ROI selection (no exclusion, and suggest_rois may
+    # use it). The frontend defaults its manual toggle to label_detected.
+    exclusion_box = (ex, ey, ew, eh) if label_present else None
+    rois = suggest_rois(exp['variability'], exclusion_box=exclusion_box)
+    return jsonify(
+        suggestions=rois,
+        label_detected=bool(label_present),
+        exclusion=({'x': ex, 'y': ey, 'w': ew, 'h': eh}
+                   if label_present else None),
+        # The box geometry is always sent so the manual toggle can re-impose
+        # the restriction even when detection said "absent".
+        label_box={'x': ex, 'y': ey, 'w': ew, 'h': eh})
 
 
 @app.route('/api/metrics/<exp_id>/<int:epoch>')
@@ -1380,6 +1390,12 @@ def _ensure_loaded(exp_id):
         exp['num_epochs'] = len(frames)
         exp['height'] = frames[0].shape[0]
         exp['width'] = frames[0].shape[1]
+        # Detect whether the burned-in top-right label is actually present
+        # (the highest-epoch frame carries a numeric label if any do). Stored
+        # as a persistent scalar — it survives LRU frame eviction.
+        H0, W0 = frames[0].shape
+        exp['label_present'] = detect_label_present(
+            frames[-1], compute_label_exclusion(W0, H0))
         _access_times[exp_id] = time.time()
         # Regenerate labels if frame count changed
         if len(exp.get('epoch_labels', [])) != len(frames):
