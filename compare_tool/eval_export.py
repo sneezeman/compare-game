@@ -95,18 +95,27 @@ def build_csv(rows):
     return buf.getvalue()
 
 
+# Shown in the workdir prompt — the dataset's denoising/ directory. batch_eval.sh
+# takes it as the optional 5th arg; the user pastes their own path at runtime.
+_WORKDIR_EXAMPLE = ('/data/visitor/ls3639/id16a/20260211/'
+                    'PROCESSED_DATA/NM0029/denoising/')
+
+
 def build_sh(rows):
-    """One long &&-chained script: rewrite eval_manual.sh's four vars and
-    sbatch it, once per row. Returns just the shebang when there are no rows."""
-    blocks = []
-    for r in rows:
-        blocks.append(
-            f'sed -i \'s/^metadata=.*/metadata="{r.full_metadata}"/\' eval_manual.sh && \\\n'
-            f'sed -i \'s/^epoch=.*/epoch="{r.selected_epoch}"/\' eval_manual.sh && \\\n'
-            f'sed -i \'s/^checkpoint_metadata=.*/checkpoint_metadata="{r.full_checkpoint_metadata}"/\' eval_manual.sh && \\\n'
-            f'sed -i \'s/^finetune_epoch=.*/finetune_epoch="{r.finetune_epoch}"/\' eval_manual.sh && \\\n'
-            f'sbatch eval_manual.sh'
-        )
-    if not blocks:
+    """Argument-driven batch script: prompt once for the workdir, then one
+    `sbatch batch_eval.sh <metadata> <epoch> <checkpoint_metadata>
+    <finetune_epoch> <workdir>` line per row. Jobs are independent (no shared
+    file to rewrite), so the lines aren't chained — a bad submit won't abort
+    the rest. Returns just the shebang when there are no rows."""
+    if not rows:
         return '#!/bin/bash\n'
-    return '#!/bin/bash\n' + ' && \\\n'.join(blocks) + '\n'
+    lines = [
+        '#!/bin/bash',
+        f'read -rp "Enter workdir (e.g. {_WORKDIR_EXAMPLE}): " workdir',
+        '',
+    ]
+    for r in rows:
+        lines.append(
+            f'sbatch batch_eval.sh "{r.full_metadata}" "{r.selected_epoch}" '
+            f'"{r.full_checkpoint_metadata}" "{r.finetune_epoch}" "$workdir"')
+    return '\n'.join(lines) + '\n'

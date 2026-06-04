@@ -136,92 +136,128 @@ async function loadPreloaded() {
         section.style.display = 'block';
         list.innerHTML = '';
 
-        // Group experiments by directory path
+        // Build a 2-level folder tree: level 1 = first path segment (proposal,
+        // e.g. ls3639), level 2 = second segment (sub-dataset, e.g. NM0024).
+        // Below the two folder levels, each experiment directory holds its
+        // view GIFs. Only the first two path levels become nested folders.
         const tree = {};
         data.experiments.forEach(exp => {
             const parts = exp.filename.split('/');
             const viewFile = parts.pop();
-            const dirPath = parts.join('/') || '.';
-            if (!tree[dirPath]) tree[dirPath] = [];
-            tree[dirPath].push({ ...exp, viewFile });
+            const expDir = parts.join('/') || '.';
+            const l1 = parts[0] || '.';
+            const l2 = parts.length > 1 ? parts[1] : '';
+            (tree[l1] ??= {});
+            (tree[l1][l2] ??= {});
+            (tree[l1][l2][expDir] ??= []).push({ ...exp, viewFile });
         });
 
-        // Sort GIFs within each directory by filename
-        for (const dir in tree) {
-            tree[dir].sort((a, b) => a.viewFile.localeCompare(b.viewFile));
-        }
+        list.innerHTML = '';
+        _folderSeq = 0;
 
-        // Sort directories
-        const sortedDirs = Object.keys(tree).sort();
-
-        sortedDirs.forEach(dirPath => {
-            const dirDiv = document.createElement('div');
-            dirDiv.className = 'dir-group';
-
-            // Directory header with toggle and select-all
-            const header = document.createElement('div');
-            header.className = 'dir-header';
-            const dirId = 'dir-' + dirPath.replace(/[^a-zA-Z0-9]/g, '_');
-            header.innerHTML = `
-                <span class="dir-toggle" onclick="toggleDir('${escapeHtml(dirId)}')">&#9660;</span>
-                <label class="checkbox-label">
-                    <input type="checkbox" class="dir-checkbox" data-dir="${escapeHtml(dirId)}"
-                        onchange="toggleDirCheckboxes('${escapeHtml(dirId)}', this.checked)">
-                </label>
-                <span class="dir-name" onclick="toggleDir('${escapeHtml(dirId)}')">${formatDirName(dirPath)}</span>
-                <span class="dir-raw-path">${escapeHtml(dirPath)}</span>
-            `;
-            dirDiv.appendChild(header);
-
-            // GIF list within directory
-            const contents = document.createElement('div');
-            contents.className = 'dir-contents';
-            contents.id = dirId;
-
-            tree[dirPath].forEach(exp => {
-                const doneClass = exp.has_results ? ' upload-item-done' : '';
-                const doneBy = exp.done_by || '';
-                const doneBadge = exp.has_results
-                    ? `<span class="done-badge">${doneBy ? 'done by ' + escapeHtml(doneBy) : 'done'}</span>`
-                    : '';
-                const div = document.createElement('div');
-                div.className = 'upload-item' + doneClass;
-                div.innerHTML = `
-                    <label class="checkbox-label">
-                        <input type="checkbox" class="exp-checkbox" data-exp-id="${escapeHtml(exp.exp_id)}"
-                               data-num-epochs="${exp.num_epochs}" data-width="${exp.width}"
-                               data-height="${exp.height}" data-filename="${escapeHtml(exp.filename)}"
-                               data-dir="${escapeHtml(dirId)}">
-                    </label>
-                    <div class="exp-info-text">
-                        <span class="filename">${escapeHtml(exp.viewFile)} ${doneBadge}</span>
-                        <span class="info">${exp.num_epochs} epochs, ${exp.width}x${exp.height}</span>
-                    </div>
-                `;
-                contents.appendChild(div);
+        Object.keys(tree).sort().forEach(l1 => {
+            const l1Folder = makeFolder(escapeHtml(l1), '');
+            Object.keys(tree[l1]).sort().forEach(l2 => {
+                // Shallow paths (no second segment) hang experiments off level 1.
+                const l2Folder = l2 ? makeFolder(escapeHtml(l2), '') : null;
+                const expParent = l2Folder ? l2Folder.contents : l1Folder.contents;
+                Object.keys(tree[l1][l2]).sort().forEach(expDir => {
+                    const exps = tree[l1][l2][expDir]
+                        .sort((a, b) => a.viewFile.localeCompare(b.viewFile));
+                    const expFolder = makeFolder(formatDirName(expDir), expDir);
+                    exps.forEach(exp => expFolder.contents.appendChild(makeExpItem(exp)));
+                    // Auto-collapse experiments that already have results.
+                    if (exps.some(e => e.has_results)) collapseFolder(expFolder);
+                    expParent.appendChild(expFolder.group);
+                });
+                if (l2Folder) l1Folder.contents.appendChild(l2Folder.group);
             });
-
-            // Auto-collapse folders where every experiment is done
-            const allDone = tree[dirPath].some(exp => exp.has_results);
-            if (allDone) {
-                contents.classList.add('collapsed');
-                header.querySelector('.dir-toggle').innerHTML = '&#9654;';
-            }
-
-            dirDiv.appendChild(contents);
-            list.appendChild(dirDiv);
+            list.appendChild(l1Folder.group);
         });
+
+        refreshAllFolders();
 
         updateStartButton();
         list.addEventListener('change', (e) => {
             if (e.target.classList.contains('exp-checkbox')) {
-                syncDirCheckbox(e.target.dataset.dir);
+                refreshAllFolders();
             }
             updateStartButton();
         });
     } catch (e) {
         // ignore
     }
+}
+
+let _folderSeq = 0;
+
+// Create a collapsible folder; returns {group, contents}. The folder checkbox
+// cascades down to every .exp-checkbox nested inside (any depth); ancestor
+// folders re-sync via refreshAllFolders() on any change. `label` is raw HTML
+// (callers pass escapeHtml(...) for plain text, or formatDirName(...) markup).
+function makeFolder(label, rawPath) {
+    const id = 'dir-' + (_folderSeq++);
+    const group = document.createElement('div');
+    group.className = 'dir-group';
+    const header = document.createElement('div');
+    header.className = 'dir-header';
+    header.innerHTML = `
+        <span class="dir-toggle" onclick="toggleDir('${id}')">&#9660;</span>
+        <label class="checkbox-label">
+            <input type="checkbox" class="dir-checkbox"
+                   onchange="toggleDirCheckboxes('${id}', this.checked)">
+        </label>
+        <span class="dir-name" onclick="toggleDir('${id}')">${label}</span>
+        ${rawPath ? `<span class="dir-raw-path">${escapeHtml(rawPath)}</span>` : ''}
+    `;
+    const contents = document.createElement('div');
+    contents.className = 'dir-contents';
+    contents.id = id;
+    group.appendChild(header);
+    group.appendChild(contents);
+    return { group, contents };
+}
+
+// One selectable view-GIF row.
+function makeExpItem(exp) {
+    const doneBadge = exp.has_results
+        ? `<span class="done-badge">${exp.done_by ? 'done by ' + escapeHtml(exp.done_by) : 'done'}</span>`
+        : '';
+    const div = document.createElement('div');
+    div.className = 'upload-item' + (exp.has_results ? ' upload-item-done' : '');
+    div.innerHTML = `
+        <label class="checkbox-label">
+            <input type="checkbox" class="exp-checkbox" data-exp-id="${escapeHtml(exp.exp_id)}"
+                   data-num-epochs="${exp.num_epochs}" data-width="${exp.width}"
+                   data-height="${exp.height}" data-filename="${escapeHtml(exp.filename)}">
+        </label>
+        <div class="exp-info-text">
+            <span class="filename">${escapeHtml(exp.viewFile)} ${doneBadge}</span>
+            <span class="info">${exp.num_epochs} epochs, ${exp.width}x${exp.height}</span>
+        </div>
+    `;
+    return div;
+}
+
+function collapseFolder(folder) {
+    folder.contents.classList.add('collapsed');
+    folder.group.querySelector('.dir-toggle').innerHTML = '&#9654;';
+}
+
+// Recompute one folder's checkbox (checked / indeterminate) from the
+// .exp-checkboxes nested anywhere inside it.
+function refreshFolderCheckbox(group) {
+    const contents = group.querySelector(':scope > .dir-contents');
+    const dirCb = group.querySelector(':scope > .dir-header .dir-checkbox');
+    if (!contents || !dirCb) return;
+    const total = contents.querySelectorAll('.exp-checkbox').length;
+    const checked = contents.querySelectorAll('.exp-checkbox:checked').length;
+    dirCb.checked = total > 0 && checked === total;
+    dirCb.indeterminate = checked > 0 && checked < total;
+}
+
+function refreshAllFolders() {
+    document.querySelectorAll('#preloaded-list .dir-group').forEach(refreshFolderCheckbox);
 }
 
 // Export eval sheet (CSV) or sbatch script (.sh) for the checked experiments,
@@ -281,20 +317,13 @@ function toggleDir(dirId) {
     }
 }
 
+// A folder checkbox cascades to every nested .exp-checkbox, then all folder
+// checkboxes (this one, its descendants, and its ancestors) re-sync.
 function toggleDirCheckboxes(dirId, checked) {
     const contents = document.getElementById(dirId);
     contents.querySelectorAll('.exp-checkbox').forEach(cb => { cb.checked = checked; });
+    refreshAllFolders();
     updateStartButton();
-}
-
-function syncDirCheckbox(dirId) {
-    if (!dirId) return;
-    const contents = document.getElementById(dirId);
-    const all = contents.querySelectorAll('.exp-checkbox');
-    const checkedCount = contents.querySelectorAll('.exp-checkbox:checked').length;
-    const dirCb = contents.parentElement.querySelector('.dir-checkbox');
-    dirCb.checked = checkedCount === all.length;
-    dirCb.indeterminate = checkedCount > 0 && checkedCount < all.length;
 }
 
 async function loadPastResults() {

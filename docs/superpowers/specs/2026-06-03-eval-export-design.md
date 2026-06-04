@@ -82,18 +82,21 @@ T001,NM0029_HT_100nm_T001_0001_rec_,T000,142
 
 ### .sh output
 
+Updated 2026-06-04: the eval script is now the argument-driven `batch_eval.sh`
+(`sbatch batch_eval.sh <metadata> <epoch> <checkpoint_metadata> <finetune_epoch>
+[workdir]`), replacing the sed-rewrite of `eval_manual.sh`. The script prompts
+once for the dataset workdir, then emits one independent `sbatch` line per row
+(no `&&` chain — the jobs no longer share a file to rewrite, so a bad submit
+must not abort the rest):
+
 ```bash
 #!/bin/bash
-sed -i 's/^metadata=.*/metadata="NM0029_HT_100nm_T001_0001_rec_"/' eval_manual.sh && \
-sed -i 's/^epoch=.*/epoch="142"/' eval_manual.sh && \
-sed -i 's/^checkpoint_metadata=.*/checkpoint_metadata="NM0029_HT_100nm_T000_0001_rec_"/' eval_manual.sh && \
-sed -i 's/^finetune_epoch=.*/finetune_epoch="140"/' eval_manual.sh && \
-sbatch eval_manual.sh && \
-sed -i 's/^metadata=.*/metadata="<next>"/' eval_manual.sh && \
+read -rp "Enter workdir (e.g. /data/visitor/ls3639/id16a/20260211/PROCESSED_DATA/NM0029/denoising/): " workdir
+
+sbatch batch_eval.sh "NM0029_HT_100nm_T001_0001_rec_" "142" "NM0029_HT_100nm_T000_0001_rec_" "140" "$workdir"
+sbatch batch_eval.sh "<next metadata>" "<epoch>" "<next checkpoint>" "<finetune_epoch>" "$workdir"
 ...
-sbatch eval_manual.sh
 ```
-All rows in one `&&` chain (last block has no trailing `&&`).
 
 ## Frontend
 

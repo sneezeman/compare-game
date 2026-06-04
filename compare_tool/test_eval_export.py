@@ -98,18 +98,23 @@ def test_build_csv_header_and_row():
     assert lines[1] == 'T001,NM0029_HT_100nm_T001_0001_rec_,T000,142'
 
 
-def test_build_sh_chained_and_sbatch():
+def test_build_sh_uses_batch_eval_with_args():
     sh = build_sh(collect_eval_rows([_result(FT, 142), _result(FT2, 175)]))
     assert sh.startswith('#!/bin/bash')
-    assert sh.count('sbatch eval_manual.sh') == 2
-    assert 'metadata="NM0029_HT_100nm_T001_0001_rec_"' in sh
-    assert 'checkpoint_metadata="NM0029_HT_100nm_T000_0001_rec_"' in sh
-    assert 'finetune_epoch="170"' in sh
-    # Single &&-chain: every line except the last continues with ` && \`.
-    body = [ln for ln in sh.splitlines() if ln and not ln.startswith('#!')]
-    assert all(ln.rstrip().endswith('&& \\') for ln in body[:-1])
-    assert not body[-1].rstrip().endswith('\\')
+    # Prompts for the workdir once at the start.
+    assert 'read -rp' in sh and 'workdir' in sh
+    # One argument-driven sbatch line per row; no sed / eval_manual.sh anymore.
+    assert sh.count('sbatch batch_eval.sh') == 2
+    assert 'sed' not in sh
+    assert 'eval_manual.sh' not in sh
+    # Args in order: metadata, epoch, checkpoint_metadata, finetune_epoch, workdir.
+    assert ('sbatch batch_eval.sh "NM0029_HT_100nm_T001_0001_rec_" "142" '
+            '"NM0029_HT_100nm_T000_0001_rec_" "140" "$workdir"') in sh
+    assert ('sbatch batch_eval.sh "NM0029_HT_100nm_T001_0001_rec_" "175" '
+            '"NM0029_HT_100nm_T014_0001_rec_" "170" "$workdir"') in sh
 
 
-def test_empty_sh_is_just_shebang():
-    assert build_sh([]).strip() == '#!/bin/bash'
+def test_empty_sh_has_no_jobs():
+    sh = build_sh([])
+    assert sh.startswith('#!/bin/bash')
+    assert 'sbatch' not in sh
