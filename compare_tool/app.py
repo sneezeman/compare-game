@@ -21,7 +21,9 @@ from flask import (Flask, Response, g, jsonify, render_template, request,
                    send_file)
 from PIL import Image
 
+import metrics_store
 from eval_export import build_csv, build_sh, collect_eval_rows
+from precompute import build_worklist, is_idle
 from gif_loader import (compute_label_exclusion, compute_variability_map,
                         detect_label_present, extract_frames, suggest_rois,
                         variability_to_heatmap_rgba)
@@ -84,6 +86,12 @@ _BAN_WINDOW = 300    # within this many seconds
 @app.before_request
 def check_auth():
     ip = request.remote_addr
+
+    # Mark user activity so the idle precompute worker backs off. /health is a
+    # liveness probe, not a user — don't let it keep the worker paused forever.
+    if request.path != '/health':
+        global _last_request_time
+        _last_request_time = time.time()
 
     # Health check and logout — exempt from auth
     if request.path in ('/health', '/logout'):
@@ -199,6 +207,13 @@ _metrics_cache = {}
 _access_times = {}
 _MAX_LOADED = 3  # max experiments with frames in memory at once
 _MAX_METRICS_CACHE = 5000  # max entries in metrics cache
+
+# --- Idle metrics precompute (disk-persisted whole-frame metrics) ---
+DEFAULT_R_O = 0.5  # whole-frame metrics at this r_o are persisted to the store
+_metrics_db = metrics_store.connect(
+    os.environ.get('COMPARE_METRICS_DB', '/opt/compare-game/metrics_cache.sqlite'))
+_last_request_time = time.time()  # stamped by before_request; gates the worker
+_PRECOMPUTE_IDLE_SECONDS = 60
 # Past results: [{filename, date, gifs, roi, top3, path}, ...]
 past_results = []
 # Filenames that have completed comparisons: {gif_filename: user_name}
@@ -271,11 +286,29 @@ def generate_epoch_labels(num_epochs, start=None, end=None, step=None, raw_first
 # ---------------------------------------------------------------------------
 
 def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
-    """Get metrics with caching."""
+    """Get metrics with caching.
+
+    L1 = in-memory cache (all ROIs / r_o). L2 = persistent disk store, but only
+    for whole-frame (no ROI) at the default r_o — those are what the idle
+    precompute warms. An L2 hit also skips the expensive GIF decode entirely.
+    """
     key = (exp_id, epoch, roi_str or '', r_o)
     with _state_lock:
         if key in _metrics_cache:
             return _metrics_cache[key]
+
+    whole_frame = (not roi_str) and r_o == DEFAULT_R_O
+    meta = experiments.get(exp_id)
+    if meta is None:
+        return None
+
+    # L2: persistent store (whole-frame, default r_o) — no frame load on a hit.
+    if whole_frame and meta.get('filename') and 0 <= epoch < meta.get('num_epochs', 0):
+        stored = metrics_store.get(_metrics_db, meta['filename'], epoch, r_o)
+        if stored is not None:
+            with _state_lock:
+                _metrics_cache[key] = stored
+            return stored
 
     exp = _ensure_loaded(exp_id)
     if not exp or epoch < 0 or epoch >= exp['num_epochs']:
@@ -291,6 +324,13 @@ def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
             for k in keys[:len(keys) // 2]:
                 del _metrics_cache[k]
         _metrics_cache[key] = results
+    # Write-through to the persistent store for whole-frame default-r_o results,
+    # so the worker (and future restarts) find them already warm.
+    if whole_frame and exp.get('filename'):
+        try:
+            metrics_store.put(_metrics_db, exp['filename'], epoch, r_o, results)
+        except Exception as e:
+            print(f'  metrics_store put failed for {exp["filename"]} ep{epoch}: {e}')
     return results
 
 
@@ -848,6 +888,52 @@ def _cross_view_worker():
 
 _cross_view_thread = threading.Thread(target=_cross_view_worker, daemon=True)
 _cross_view_thread.start()
+
+
+def _precompute_worker():
+    """When the VPS is idle, warm the persistent store with whole-frame metrics
+    for every non-RAW (GIF, epoch) at the default r_o, so the pre-filter and
+    cross-view never wait on a cold cache. Pauses the instant a user request
+    arrives and resumes after a quiet period. Survives restarts (the store is
+    on disk), so each GIF is computed once ever, not after every upload."""
+    time.sleep(20)  # let the initial data scan populate `experiments`
+    while True:
+        try:
+            present = metrics_store.present_pairs(_metrics_db, DEFAULT_R_O)
+            with _state_lock:
+                exps = [{'exp_id': eid,
+                         'filename': e['filename'],
+                         'num_epochs': e.get('num_epochs', 0),
+                         'raw_first': bool(e.get('epoch_config', {}).get('raw_first'))}
+                        for eid, e in experiments.items()
+                        if e.get('num_epochs') and e.get('filename')]
+            work = build_worklist(exps, present)
+            if not work:
+                time.sleep(120)  # nothing missing; re-check for new uploads later
+                continue
+            total = len(work)
+            print(f'  [precompute] warming {total} (GIF, epoch) pairs')
+            done = 0
+            for exp_id, filename, epoch in work:
+                # Idle gate: wait while a user is active; pause before each item.
+                while not is_idle(time.time(), _last_request_time,
+                                  _PRECOMPUTE_IDLE_SECONDS):
+                    time.sleep(5)
+                try:
+                    _get_cached_metrics(exp_id, epoch, '', DEFAULT_R_O)
+                    done += 1
+                    if done % 50 == 0:
+                        print(f'  [precompute] {done}/{total} warmed')
+                except Exception as e:
+                    print(f'  [precompute] error {filename} ep{epoch}: {e}')
+            print(f'  [precompute] pass complete: {done}/{total} warmed')
+        except Exception as e:
+            print(f'  [precompute] worker error: {e}')
+            time.sleep(60)
+
+
+_precompute_thread = threading.Thread(target=_precompute_worker, daemon=True)
+_precompute_thread.start()
 
 
 @app.route('/api/cross-view/start', methods=['POST'])
