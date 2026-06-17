@@ -31,3 +31,6 @@ users.json
 
 # Claude Code
 CLAUDE.md
+
+# Idle metrics precompute store
+metrics_cache.sqlite*
