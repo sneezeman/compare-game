@@ -23,7 +23,8 @@ from PIL import Image
 
 import metrics_store
 from eval_export import build_csv, build_sh, collect_eval_rows
-from precompute import build_worklist, is_idle
+from precompute import (build_worklist, is_idle, scan_is_settled,
+                        sibling_filenames)
 from gif_loader import (compute_label_exclusion, compute_variability_map,
                         detect_label_present, extract_frames, suggest_rois,
                         variability_to_heatmap_rgba)
@@ -896,7 +897,19 @@ def _precompute_worker():
     cross-view never wait on a cold cache. Pauses the instant a user request
     arrives and resumes after a quiet period. Survives restarts (the store is
     on disk), so each GIF is computed once ever, not after every upload."""
-    time.sleep(20)  # let the initial data scan populate `experiments`
+    # Wait for the cold-start scan to finish populating `experiments` (the count
+    # stops growing) so the first work-list is the full set, not a partial slice
+    # of a still-loading scan. Capped so it can never hang forever.
+    prev_count, waited = -1, 0
+    while waited < 900:
+        time.sleep(15)
+        waited += 15
+        with _state_lock:
+            curr_count = sum(1 for e in experiments.values() if e.get('num_epochs'))
+        if scan_is_settled(prev_count, curr_count):
+            break
+        prev_count = curr_count
+
     while True:
         try:
             present = metrics_store.present_pairs(_metrics_db, DEFAULT_R_O)
@@ -907,7 +920,13 @@ def _precompute_worker():
                          'raw_first': bool(e.get('epoch_config', {}).get('raw_first'))}
                         for eid, e in experiments.items()
                         if e.get('num_epochs') and e.get('filename')]
-            work = build_worklist(exps, present)
+                # Skip experiments that already have tournament results — and
+                # their sibling views (one processed view = the whole experiment
+                # is done, so there's no need to warm view0/1/2).
+                skip = set()
+                for f in list(completed_gifs):
+                    skip |= sibling_filenames(f)
+            work = build_worklist(exps, present, skip_filenames=skip)
             if not work:
                 time.sleep(120)  # nothing missing; re-check for new uploads later
                 continue
