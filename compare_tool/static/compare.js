@@ -866,19 +866,30 @@ async function showPrefilter() {
 
         const metricsRoi = new Array(candidates.length);
         const metricsFull = new Array(candidates.length);
+        let pfTimeouts = 0;
 
+        // Resilient: a slow/failed metric request (e.g. 504 timeout on a cold
+        // cache) must not crash the whole pre-filter. Return empty values for
+        // that candidate and keep going; we surface a count afterwards.
         const fetchOne = async (c, idx, useRoi) => {
-            const resp = await fetch('/api/prefilter-metric', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    exp_id: c.exp_id, epoch: c.epoch,
-                    r_o: state.rO, roi: state.roi, use_roi: useRoi,
-                }),
-            });
-            const d = await resp.json();
-            updateProgress();
-            return d.values || {};
+            try {
+                const resp = await fetch('/api/prefilter-metric', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        exp_id: c.exp_id, epoch: c.epoch,
+                        r_o: state.rO, roi: state.roi, use_roi: useRoi,
+                    }),
+                });
+                if (!resp.ok) { pfTimeouts++; updateProgress(); return {}; }
+                const d = await resp.json();
+                updateProgress();
+                return d.values || {};
+            } catch (e) {
+                pfTimeouts++;
+                updateProgress();
+                return {};
+            }
         };
 
         const promises = [];
@@ -930,6 +941,22 @@ async function showPrefilter() {
         pfIdxLeft = 0;
         pfIdxRight = prefilterCandidates.length - 1;
         renderPrefilterViewer();
+
+        if (pfTimeouts > 0) {
+            const sortRow = document.getElementById('pf-sort-row');
+            if (sortRow && sortRow.parentNode) {
+                let warn = document.getElementById('pf-timeout-warn');
+                if (!warn) {
+                    warn = document.createElement('div');
+                    warn.id = 'pf-timeout-warn';
+                    warn.style.cssText = 'color:#e9a23b;font-size:0.9em;margin:6px 0;text-align:center;';
+                    sortRow.parentNode.insertBefore(warn, sortRow);
+                }
+                warn.textContent = `⚠ ${pfTimeouts} of ${total} metric computations timed out `
+                    + `(cold cache on a large dataset). Rankings may be incomplete — `
+                    + `you can "Skip" straight to the tournament; metrics warm up in the background.`;
+            }
+        }
 
         // Kick off cross-view computation in the background — by the time the
         // user finishes the tournament, the sibling-view metrics should be ready
