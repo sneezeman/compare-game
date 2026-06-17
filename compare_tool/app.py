@@ -931,7 +931,9 @@ def _precompute_worker():
                 time.sleep(120)  # nothing missing; re-check for new uploads later
                 continue
             total = len(work)
-            print(f'  [precompute] warming {total} (GIF, epoch) pairs')
+            # flush=True: the worker's output is sparse, so without it the lines
+            # sit in gunicorn's block-buffered stdout and never reach the journal.
+            print(f'  [precompute] warming {total} (GIF, epoch) pairs', flush=True)
             done = 0
             for exp_id, filename, epoch in work:
                 # Idle gate: wait while a user is active; pause before each item.
@@ -942,12 +944,12 @@ def _precompute_worker():
                     _get_cached_metrics(exp_id, epoch, '', DEFAULT_R_O)
                     done += 1
                     if done % 50 == 0:
-                        print(f'  [precompute] {done}/{total} warmed')
+                        print(f'  [precompute] {done}/{total} warmed', flush=True)
                 except Exception as e:
-                    print(f'  [precompute] error {filename} ep{epoch}: {e}')
-            print(f'  [precompute] pass complete: {done}/{total} warmed')
+                    print(f'  [precompute] error {filename} ep{epoch}: {e}', flush=True)
+            print(f'  [precompute] pass complete: {done}/{total} warmed', flush=True)
         except Exception as e:
-            print(f'  [precompute] worker error: {e}')
+            print(f'  [precompute] worker error: {e}', flush=True)
             time.sleep(60)
 
 
