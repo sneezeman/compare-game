@@ -77,8 +77,9 @@ def put(conn, filename, epoch, r_o, metrics, computed_at=None):
         conn.commit()
 
 
-def present_pairs(conn, r_o):
-    """Set of (filename, epoch) already stored at this r_o — for the work-list."""
+def present_frames(conn, r_o):
+    """Set of (filename, epoch) frames already stored at this r_o — each
+    identifies one image; used to skip already-computed frames in the work-list."""
     cur = conn.execute(
         "SELECT gif_filename, epoch FROM metrics WHERE r_o=?", (float(r_o),)
     )

@@ -22,11 +22,11 @@ def sibling_filenames(filename):
     return {_VIEW_RE.sub("view%d" % v, filename, count=1) for v in (0, 1, 2)}
 
 
-def build_worklist(exps, present_pairs, skip_filenames=None):
+def build_worklist(exps, present_frames, skip_filenames=None):
     """Ordered list of (exp_id, filename, epoch) still needing metrics.
 
     exps: iterable of dicts with exp_id, filename, num_epochs, raw_first.
-    present_pairs: set of (filename, epoch) already in the store.
+    present_frames: set of (filename, epoch) already in the store.
     skip_filenames: filenames to skip entirely (e.g. experiments that already
         have tournament results — no point warming what's been processed).
     Skips the RAW frame (epoch 0 when raw_first) and anything already present.
@@ -40,7 +40,7 @@ def build_worklist(exps, present_pairs, skip_filenames=None):
             continue
         start = 1 if e.get("raw_first") else 0
         for epoch in range(start, e["num_epochs"]):
-            if (e["filename"], epoch) not in present_pairs:
+            if (e["filename"], epoch) not in present_frames:
                 work.append((e["exp_id"], e["filename"], epoch))
     return work
 

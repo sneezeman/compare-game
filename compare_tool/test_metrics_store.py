@@ -32,14 +32,14 @@ def test_persists_across_reopen(tmp_path):
     assert ms.get(c2, "p.gif", 2, 0.5) == M
 
 
-def test_present_pairs_filtered_by_ro(tmp_path):
+def test_present_frames_filtered_by_ro(tmp_path):
     conn = ms.connect(str(tmp_path / "m.sqlite"))
     ms.put(conn, "g1.gif", 1, 0.5, M)
     ms.put(conn, "g1.gif", 2, 0.5, M)
     ms.put(conn, "g2.gif", 1, 0.5, M)
     ms.put(conn, "g1.gif", 9, 0.7, M)  # different r_o — excluded at 0.5
-    assert ms.present_pairs(conn, 0.5) == {("g1.gif", 1), ("g1.gif", 2), ("g2.gif", 1)}
-    assert ms.present_pairs(conn, 0.7) == {("g1.gif", 9)}
+    assert ms.present_frames(conn, 0.5) == {("g1.gif", 1), ("g1.gif", 2), ("g2.gif", 1)}
+    assert ms.present_frames(conn, 0.7) == {("g1.gif", 9)}
 
 
 def test_replace_overwrites(tmp_path):
@@ -53,4 +53,4 @@ def test_replace_overwrites(tmp_path):
 def test_connect_creates_missing_db_and_schema(tmp_path):
     # Opening a brand-new path must just work (schema created on open).
     conn = ms.connect(str(tmp_path / "nested" / "new.sqlite"))
-    assert ms.present_pairs(conn, 0.5) == set()
+    assert ms.present_frames(conn, 0.5) == set()

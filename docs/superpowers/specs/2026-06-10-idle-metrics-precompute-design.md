@@ -9,7 +9,7 @@ Whole-frame image-quality metrics are computed on demand (pre-filter screen,
 cross-view consensus, tournament ranking), so users wait behind a "Computing
 metrics…" bar. The cache holding them is **in-memory, bounded to 5000 entries,
 and wiped on every restart** — and the dataset (513 GIFs, ~8k non-RAW
-(GIF, epoch) pairs) both exceeds the cap and is re-uploaded/restarted often.
+(GIF, epoch) frames) both exceeds the cap and is re-uploaded/restarted often.
 
 ## Goal
 
@@ -49,7 +49,7 @@ Interface (all pure functions over a connection/path):
 - `get(filename, epoch, r_o) -> list | None`
 - `put(filename, epoch, r_o, metrics) -> None`
 - `has(filename, epoch, r_o) -> bool`
-- `present_pairs(r_o) -> set[(filename, epoch)]`  (for the work-list)
+- `present_frames(r_o) -> set[(filename, epoch)]`  (for the work-list)
 
 `metrics` is the same list-of-`(name, value, higher_is_better)` the app already
 caches; stored as JSON.
@@ -65,7 +65,7 @@ live traffic.
 ### 3. Idle precompute worker — `_precompute_worker` daemon thread
 - `before_request` stamps `_last_request_time` (skip `/health`).
 - Build a work-list of `(exp_id, filename, epoch)` **missing from the store**
-  (`present_pairs` minus all non-RAW pairs), **ordered by GIF** so every epoch of
+  (`present_frames` minus all non-RAW frames), **ordered by GIF** so every epoch of
   a loaded GIF is computed before LRU eviction (avoids reload churn). RAW frame
   (epoch 0 when `raw_first`) is skipped.
 - Loop: if `now − _last_request_time ≥ IDLE_SECONDS (60)`, compute the next item
@@ -77,7 +77,7 @@ live traffic.
 
 ## Data flow
 
-1. Boot → worker builds work-list from `present_pairs` vs current experiments.
+1. Boot → worker builds work-list from `present_frames` vs current experiments.
 2. Quiet ≥60 s → compute missing item → `compute_all` → write-through to store +
    in-memory cache.
 3. User request → `before_request` stamps time → worker pauses before next item.
@@ -96,8 +96,8 @@ live traffic.
 ## Testing
 
 - `metrics_store`: put/get/has roundtrip; missing → None; survives reopen
-  (persistence); `present_pairs` returns exactly stored pairs for an `r_o`.
-- Work-list builder: excludes present pairs and the RAW frame; orders by GIF.
+  (persistence); `present_frames` returns exactly the stored frames for an `r_o`.
+- Work-list builder: excludes already-stored frames and the RAW frame; orders by GIF.
 - Idle gate (fake clock): computes when `now − last_request ≥ 60`; pauses when a
   request was recent.
 - Integration smoke (on the 513-GIF dataset, manual): worker fills the store while

@@ -21,7 +21,7 @@ def test_worklist_skips_raw_frame():
     assert build_worklist(exps, set()) == [("e1", "g.gif", 1), ("e1", "g.gif", 2)]
 
 
-def test_worklist_excludes_present_pairs():
+def test_worklist_excludes_present_frames():
     exps = [_exp("e1", "g.gif", 3)]
     present = {("g.gif", 0), ("g.gif", 2)}
     assert build_worklist(exps, present) == [("e1", "g.gif", 1)]

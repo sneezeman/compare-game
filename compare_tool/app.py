@@ -912,7 +912,7 @@ def _precompute_worker():
 
     while True:
         try:
-            present = metrics_store.present_pairs(_metrics_db, DEFAULT_R_O)
+            present = metrics_store.present_frames(_metrics_db, DEFAULT_R_O)
             with _state_lock:
                 exps = [{'exp_id': eid,
                          'filename': e['filename'],
@@ -933,7 +933,7 @@ def _precompute_worker():
             total = len(work)
             # flush=True: the worker's output is sparse, so without it the lines
             # sit in gunicorn's block-buffered stdout and never reach the journal.
-            print(f'  [precompute] warming {total} (GIF, epoch) pairs', flush=True)
+            print(f'  [precompute] warming {total} frames', flush=True)
             done = 0
             for exp_id, filename, epoch in work:
                 # Idle gate: wait while a user is active; pause before each item.
