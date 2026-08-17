@@ -211,15 +211,23 @@
 
             <div id="eval-command-box" style="display:none;">
                 <h3 class="eval-cmd-title">Run the evaluation for the winner</h3>
+                <div class="eval-cmd-dir-row">
+                    <label for="eval-metadata-dir">metadata dir</label>
+                    <input type="text" id="eval-metadata-dir" class="eval-cmd-dir"
+                           spellcheck="false" autocapitalize="off" autocomplete="off"
+                           placeholder="/data/visitor/&lt;proposal&gt;/id16a/&lt;date&gt;/PROCESSED_DATA/&lt;sample&gt;/denoising/metadata"
+                           oninput="onEvalMetadataDirInput()">
+                </div>
                 <div class="eval-cmd-row">
                     <code id="eval-command-text" class="eval-cmd" title="Click to select"></code>
                     <button id="eval-copy-btn" class="btn btn-secondary eval-cmd-copy"
                             onclick="copyEvalCommand()">Copy</button>
                 </div>
                 <p class="eval-cmd-note">
-                    Run from the dataset's <code>denoising/</code> directory.
-                    Workdir is omitted, so <code>batch_eval.sh</code> uses its own
-                    <code>DEFAULT_DATASET_DIR</code> — append a path as a 5th argument to override it.
+                    Run on a login node. The metadata dir is remembered in this browser —
+                    set it once and the command is complete every time.
+                    Two arguments means no transfer learning, so
+                    <code>submit_eval.sh</code> derives the checkpoint and finetune epoch itself.
                 </p>
             </div>
 

@@ -105,48 +105,50 @@ _WORKDIR_EXAMPLE = ('/data/visitor/ls3639/id16a/20260211/'
                     'PROCESSED_DATA/NM0029/denoising/')
 
 
-def build_command(row):
-    """One copy-pastable sbatch line for a single EvalRow.
-
-    The workdir (batch_eval.sh's optional 5th arg) is deliberately omitted so
-    the line can be pasted and run as-is; batch_eval.sh then falls back to its
-    own DEFAULT_DATASET_DIR. Append a workdir argument to override it.
-    """
-    return (f'sbatch batch_eval.sh "{row.full_metadata}" "{row.selected_epoch}" '
-            f'"{row.full_checkpoint_metadata}" "{row.finetune_epoch}"')
+# The cluster path to the dataset's denoising/metadata/ directory can't be
+# derived from a GIF path (the beamtime date isn't in it), so the command is
+# emitted with this token and the UI substitutes the dir the user has saved.
+METADATA_DIR_PLACEHOLDER = '<METADATA_DIR>'
 
 
-def command_for_winner(full_label):
-    """Eval command for a tournament winner, or None if one can't be built.
+def command_for_winner(full_label, metadata_dir=None):
+    """One copy-pastable `submit_eval.sh` line for a tournament winner.
+
+    Follows submit_eval.sh's argument contract, which takes a *path* to the
+    metadata file and decides the mode purely from the positional count:
+
+      training run (no transfer)  ->  submit_eval.sh "<meta>.json" "<epoch>"
+          the script then sets checkpoint_metadata=metadata, finetune_epoch=epoch
+      transfer learning (finetune) ->  ... "<epoch>" "<ckpt_metadata>" "<ft_epoch>"
+          where ckpt_metadata is a bare *name*, not a path
+
+    (1 or 3 arguments are rejected by that script, so we only ever emit 2 or 4.)
 
     full_label is the app's '<gif path> Ep.<N>' candidate label — the same shape
-    the saved-results 'Top 3:' line uses, so finetune parsing is shared with
-    collect_eval_rows rather than duplicated.
+    the saved-results 'Top 3:' line uses, so the parsing is shared with
+    collect_eval_rows. metadata_dir, when given, is prefixed onto the metadata
+    filename; otherwise METADATA_DIR_PLACEHOLDER is emitted for the UI to fill.
 
-    Unlike the CSV/.sh batch export (finetune-only by design), this also covers
-    **training tiles**: batch_eval.sh evaluates those through its
-    `metadata == checkpoint_metadata` branch, reading
-    results/checkpoints/<metadata>/weights_epoch_<epoch>.torch. So the tile's own
-    metadata is repeated as the checkpoint and the epoch as finetune_epoch (that
-    argument is unused on that branch). Returns None when the path is not a
-    recognizable experiment directory.
+    Returns None when the path is not a recognizable experiment directory.
     """
     if not full_label:
         return None
-
-    rows = collect_eval_rows([{'top3': full_label}])
-    if rows:
-        return build_command(rows[0])
-
-    # Not a finetune experiment — try the training-tile form.
     parsed = _parse_winner(full_label)
     if not parsed:
         return None
     gif_path, epoch = parsed
     dirname = os.path.basename(os.path.dirname(gif_path))
-    if not _TRAIN_DIR_RE.match(dirname):
-        return None
-    return (f'sbatch batch_eval.sh "{dirname}" "{epoch}" "{dirname}" "{epoch}"')
+    base = (metadata_dir or METADATA_DIR_PLACEHOLDER).rstrip('/')
+
+    ft = _FT_DIR_RE.match(dirname)
+    if ft:
+        meta, ckpt, fe = ft.group('meta'), ft.group('ckpt'), int(ft.group('fe'))
+        return (f'submit_eval.sh "{base}/{meta}.json" "{epoch}" '
+                f'"{ckpt}" "{fe}"')
+    if _TRAIN_DIR_RE.match(dirname):
+        # The whole dir name is the metadata; two args means "no transfer".
+        return f'submit_eval.sh "{base}/{dirname}.json" "{epoch}"'
+    return None
 
 
 def build_sh(rows):

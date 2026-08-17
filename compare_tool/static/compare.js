@@ -1702,8 +1702,42 @@ document.addEventListener('keydown', (e) => {
     else if (e.code === 'ArrowRight') { e.preventDefault(); t3Nav(1); }
 });
 
+// The server emits the command with a <METADATA_DIR> token, because the cluster
+// path to denoising/metadata/ can't be derived from a GIF path (the beamtime
+// date isn't in it). The user's dir is kept in this browser and substituted here.
+const EVAL_DIR_KEY = 'compareGame.evalMetadataDir';
+const EVAL_DIR_TOKEN = '<METADATA_DIR>';
+let evalCommandTemplate = null;
+
+function savedEvalMetadataDir() {
+    try {
+        return (localStorage.getItem(EVAL_DIR_KEY) || '').trim();
+    } catch (e) {
+        return '';  // private mode / storage disabled
+    }
+}
+
+function resolvedEvalCommand() {
+    if (!evalCommandTemplate) return '';
+    const dir = savedEvalMetadataDir().replace(/\/+$/, '');
+    return dir ? evalCommandTemplate.split(EVAL_DIR_TOKEN).join(dir)
+               : evalCommandTemplate;
+}
+
+function onEvalMetadataDirInput() {
+    const input = document.getElementById('eval-metadata-dir');
+    if (!input) return;
+    try {
+        localStorage.setItem(EVAL_DIR_KEY, input.value.trim());
+    } catch (e) {
+        // storage unavailable — the command still resolves for this session
+    }
+    const el = document.getElementById('eval-command-text');
+    if (el) el.textContent = resolvedEvalCommand();
+}
+
 // Show the winner's copy-pastable eval command. Hidden when the server sent
-// none — training tiles have no checkpoint, so no eval command exists.
+// none — e.g. a path that isn't a recognizable experiment directory.
 function renderEvalCommand(cmd) {
     const box = document.getElementById('eval-command-box');
     const el = document.getElementById('eval-command-text');
@@ -1712,7 +1746,10 @@ function renderEvalCommand(cmd) {
         box.style.display = 'none';
         return;
     }
-    el.textContent = cmd;
+    evalCommandTemplate = cmd;
+    const input = document.getElementById('eval-metadata-dir');
+    if (input) input.value = savedEvalMetadataDir();
+    el.textContent = resolvedEvalCommand();
     // Click the command to select it, so manual copy works even if the
     // clipboard API is unavailable.
     el.onclick = () => {

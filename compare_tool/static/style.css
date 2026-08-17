@@ -1033,3 +1033,31 @@ kbd.kbd {
     padding: 1px 4px;
     border-radius: 3px;
 }
+
+.eval-cmd-dir-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.eval-cmd-dir-row label {
+    color: #888;
+    font-size: 0.8em;
+    flex-shrink: 0;
+}
+
+.eval-cmd-dir {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    background: #0a1224;
+    border: 1px solid #2a3a5a;
+    border-radius: 6px;
+    color: #ccc;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78em;
+}
+
+.eval-cmd-dir::placeholder { color: #4a5a7a; }
+.eval-cmd-dir:focus { outline: none; border-color: #4ecdc4; }

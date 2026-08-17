@@ -115,29 +115,44 @@ def test_build_sh_uses_batch_eval_with_args():
             '"NM0029_HT_100nm_T014_0001_rec_" "170" "$workdir"') in sh
 
 
-def test_command_for_winner_finetune():
-    cmd = command_for_winner(f'{FT} Ep.142')
-    assert cmd == ('sbatch batch_eval.sh "NM0029_HT_100nm_T001_0001_rec_" "142" '
+def test_command_for_winner_finetune_is_four_args():
+    cmd = command_for_winner(f'{FT} Ep.142', metadata_dir='/data/d/denoising/metadata')
+    assert cmd == ('submit_eval.sh "/data/d/denoising/metadata/'
+                   'NM0029_HT_100nm_T001_0001_rec_.json" "142" '
                    '"NM0029_HT_100nm_T000_0001_rec_" "140"')
-    # workdir intentionally omitted -> batch_eval.sh uses its DEFAULT_DATASET_DIR
-    assert '$workdir' not in cmd and 'WORKDIR' not in cmd
+    # 3rd arg is a bare checkpoint NAME, not a path
+    assert '"NM0029_HT_100nm_T000_0001_rec_"' in cmd
 
 
-def test_command_for_winner_training_tile_self_checkpoint():
-    # A training tile has no _from_ checkpoint, but batch_eval.sh evaluates one
-    # via its `metadata == checkpoint_metadata` branch, so metadata repeats.
-    cmd = command_for_winner(f'{TR} Ep.30')
-    assert cmd == ('sbatch batch_eval.sh "NM0029_HT_100nm_T000_0001_rec_" "30" '
-                   '"NM0029_HT_100nm_T000_0001_rec_" "30"')
+def test_command_for_winner_training_tile_is_two_args():
+    # No transfer learning: submit_eval.sh derives checkpoint/finetune itself,
+    # so only 2 positional arguments may be emitted (3 would be rejected).
+    cmd = command_for_winner(f'{TR} Ep.30', metadata_dir='/data/d/denoising/metadata')
+    assert cmd == ('submit_eval.sh "/data/d/denoising/metadata/'
+                   'NM0029_HT_100nm_T000_0001_rec_.json" "30"')
+    assert cmd.count('"') == 4  # exactly two quoted args
 
 
 def test_command_for_winner_training_tile_without_tile_token():
     # Live datasets include names with no T<number> token at all.
     gif = ('ls3640/tardi3_tun/corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_/'
            'all_epochs_view0_0-60_raw.gif')
-    cmd = command_for_winner(f'{gif} Ep.55')
-    assert cmd == ('sbatch batch_eval.sh "corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_" '
-                   '"55" "corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_" "55"')
+    cmd = command_for_winner(f'{gif} Ep.55', metadata_dir='/m')
+    assert cmd == ('submit_eval.sh "/m/corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_.json" '
+                   '"55"')
+
+
+def test_command_for_winner_placeholder_when_no_dir():
+    cmd = command_for_winner(f'{TR} Ep.30')
+    assert cmd.startswith('submit_eval.sh "<METADATA_DIR>/')
+    assert cmd.endswith('.json" "30"')
+
+
+def test_command_for_winner_strips_trailing_slash():
+    a = command_for_winner(f'{TR} Ep.30', metadata_dir='/data/m/')
+    b = command_for_winner(f'{TR} Ep.30', metadata_dir='/data/m')
+    assert a == b
+    assert '//' not in a.split('submit_eval.sh ')[1]
 
 
 def test_command_for_winner_ignores_non_experiment_dirs():
