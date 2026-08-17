@@ -99,16 +99,29 @@ def build_csv(rows):
     return buf.getvalue()
 
 
-# Shown in the workdir prompt — the dataset's denoising/ directory. batch_eval.sh
-# takes it as the optional 5th arg; the user pastes their own path at runtime.
-_WORKDIR_EXAMPLE = ('/data/visitor/ls3639/id16a/20260211/'
-                    'PROCESSED_DATA/NM0029/denoising/')
+# Shown in the generated script's prompt — the dataset's denoising/metadata/
+# directory, which submit_eval.sh takes a path into as its first argument.
+_METADATA_DIR_EXAMPLE = ('/data/visitor/ls3639/id16a/20260211/'
+                         'PROCESSED_DATA/NM0029/denoising/metadata')
 
 
 # The cluster path to the dataset's denoising/metadata/ directory can't be
 # derived from a GIF path (the beamtime date isn't in it), so the command is
 # emitted with this token and the UI substitutes the dir the user has saved.
 METADATA_DIR_PLACEHOLDER = '<METADATA_DIR>'
+
+
+def build_command(row, metadata_dir=None):
+    """The `submit_eval.sh` line for one EvalRow (always transfer learning —
+    collect_eval_rows only yields finetune rows, so the 4-arg form applies).
+
+    metadata_dir may be a shell expression such as '$metadir' for use inside a
+    generated script.
+    """
+    base = (metadata_dir or METADATA_DIR_PLACEHOLDER).rstrip('/')
+    return (f'submit_eval.sh "{base}/{row.full_metadata}.json" '
+            f'"{row.selected_epoch}" "{row.full_checkpoint_metadata}" '
+            f'"{row.finetune_epoch}"')
 
 
 def command_for_winner(full_label, metadata_dir=None):
@@ -152,20 +165,22 @@ def command_for_winner(full_label, metadata_dir=None):
 
 
 def build_sh(rows):
-    """Argument-driven batch script: prompt once for the workdir, then one
-    `sbatch batch_eval.sh <metadata> <epoch> <checkpoint_metadata>
-    <finetune_epoch> <workdir>` line per row. Jobs are independent (no shared
-    file to rewrite), so the lines aren't chained — a bad submit won't abort
-    the rest. Returns just the shebang when there are no rows."""
+    """Batch script of `submit_eval.sh` calls — the same front-end the results
+    screen emits, so there is only one submission script to maintain.
+
+    Prompts once for the dataset's denoising/metadata directory (submit_eval.sh
+    takes a *path* to the metadata .json) and reuses it for every line. Jobs are
+    independent, so the lines aren't chained — a bad submit won't abort the rest.
+    Returns just the shebang when there are no rows.
+    """
     if not rows:
         return '#!/bin/bash\n'
     lines = [
         '#!/bin/bash',
-        f'read -rp "Enter workdir (e.g. {_WORKDIR_EXAMPLE}): " workdir',
+        f'read -rp "Enter metadata dir (e.g. {_METADATA_DIR_EXAMPLE}): " metadir',
+        'metadir="${metadir%/}"',
         '',
     ]
     for r in rows:
-        lines.append(
-            f'sbatch batch_eval.sh "{r.full_metadata}" "{r.selected_epoch}" '
-            f'"{r.full_checkpoint_metadata}" "{r.finetune_epoch}" "$workdir"')
+        lines.append(build_command(r, '$metadir'))
     return '\n'.join(lines) + '\n'

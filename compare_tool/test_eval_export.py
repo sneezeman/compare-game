@@ -99,20 +99,26 @@ def test_build_csv_header_and_row():
     assert lines[1] == 'T001,NM0029_HT_100nm_T001_0001_rec_,T000,142'
 
 
-def test_build_sh_uses_batch_eval_with_args():
+def test_build_sh_uses_submit_eval():
     sh = build_sh(collect_eval_rows([_result(FT, 142), _result(FT2, 175)]))
     assert sh.startswith('#!/bin/bash')
-    # Prompts for the workdir once at the start.
-    assert 'read -rp' in sh and 'workdir' in sh
-    # One argument-driven sbatch line per row; no sed / eval_manual.sh anymore.
-    assert sh.count('sbatch batch_eval.sh') == 2
-    assert 'sed' not in sh
-    assert 'eval_manual.sh' not in sh
-    # Args in order: metadata, epoch, checkpoint_metadata, finetune_epoch, workdir.
-    assert ('sbatch batch_eval.sh "NM0029_HT_100nm_T001_0001_rec_" "142" '
-            '"NM0029_HT_100nm_T000_0001_rec_" "140" "$workdir"') in sh
-    assert ('sbatch batch_eval.sh "NM0029_HT_100nm_T001_0001_rec_" "175" '
-            '"NM0029_HT_100nm_T014_0001_rec_" "170" "$workdir"') in sh
+    # Prompts once for the metadata dir, which every line then reuses.
+    assert 'read -rp' in sh and 'metadir' in sh
+    # One submit_eval.sh line per row; the older scripts are gone entirely.
+    assert sh.count('submit_eval.sh "$metadir/') == 2
+    for gone in ('batch_eval.sh', 'eval_manual.sh', 'sed ', 'workdir'):
+        assert gone not in sh, f'{gone!r} should no longer appear'
+    # 4-arg transfer-learning form: path, epoch, checkpoint NAME, finetune epoch.
+    assert ('submit_eval.sh "$metadir/NM0029_HT_100nm_T001_0001_rec_.json" "142" '
+            '"NM0029_HT_100nm_T000_0001_rec_" "140"') in sh
+    assert ('submit_eval.sh "$metadir/NM0029_HT_100nm_T001_0001_rec_.json" "175" '
+            '"NM0029_HT_100nm_T014_0001_rec_" "170"') in sh
+
+
+def test_build_sh_strips_trailing_slash_from_entered_dir():
+    # The generated script must normalise what the user types at the prompt.
+    sh = build_sh(collect_eval_rows([_result(FT, 142)]))
+    assert 'metadir="${metadir%/}"' in sh
 
 
 def test_command_for_winner_finetune_is_four_args():

@@ -458,7 +458,7 @@ def export_eval_sheet():
 
 @app.route('/api/export/eval-script', methods=['POST'])
 def export_eval_script():
-    """One &&-chained .sh that rewrites eval_manual.sh and sbatches it per row."""
+    """A .sh of submit_eval.sh calls — one per selected finetuning winner."""
     sh_text = build_sh(_eval_rows_for_request())
     return Response(sh_text, mimetype='text/x-shellscript', headers={
         'Content-Disposition': 'attachment; filename="eval_selection.sh"'})
