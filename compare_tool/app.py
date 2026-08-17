@@ -358,7 +358,9 @@ def _asset_version(filename):
 
 @app.route('/')
 def index():
-    resp = app.make_response(render_template('index.html'))
+    # Pass the authenticated name so the UI can skip asking for it.
+    resp = app.make_response(
+        render_template('index.html', username=getattr(g, 'username', '') or ''))
     # Force the HTML to always re-validate so new ?v=... tokens are picked up
     resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
     return resp
@@ -995,7 +997,10 @@ def start_tournament():
     exps_config = data.get('experiments', [])
     r_o = float(data.get('r_o', 0.5))
     roi = data.get('roi')
-    user_name = data.get('user_name', '')
+    # The logged-in identity wins: it is authenticated, so results can't be
+    # attributed to someone else. The posted name is only a fallback for
+    # deployments running without auth (no users.json configured).
+    user_name = getattr(g, 'username', None) or data.get('user_name', '')
     # Optional: exclude specific (exp_id, epoch) pairs (from pre-filter)
     exclude = set()
     for ex in data.get('exclude', []):

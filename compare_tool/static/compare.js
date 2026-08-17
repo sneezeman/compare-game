@@ -375,10 +375,14 @@ async function startWithSelected() {
     const checked = document.querySelectorAll('.exp-checkbox:checked');
     if (checked.length === 0) return;
 
-    const userName = document.getElementById('user-name').value.trim();
+    // When authenticated the server attributes results to the login, and the
+    // name field isn't rendered at all — only ask when running without auth.
+    const nameInput = document.getElementById('user-name');
+    const userName = nameInput ? nameInput.value.trim()
+                               : (document.body.dataset.username || '').trim();
     if (!userName) {
         alert('Please enter your name before starting.');
-        document.getElementById('user-name').focus();
+        if (nameInput) nameInput.focus();
         return;
     }
     state.userName = userName;

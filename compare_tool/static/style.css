@@ -1061,3 +1061,10 @@ kbd.kbd {
 
 .eval-cmd-dir::placeholder { color: #4a5a7a; }
 .eval-cmd-dir:focus { outline: none; border-color: #4ecdc4; }
+
+.signed-in {
+    color: #888;
+    font-size: 0.9em;
+}
+
+.signed-in strong { color: #4ecdc4; }
