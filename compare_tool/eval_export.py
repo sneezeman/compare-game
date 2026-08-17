@@ -110,6 +110,10 @@ _METADATA_DIR_EXAMPLE = ('/data/visitor/ls3639/id16a/20260211/'
 # emitted with this token and the UI substitutes the dir the user has saved.
 METADATA_DIR_PLACEHOLDER = '<METADATA_DIR>'
 
+# How every generated eval line starts. One constant so the results-screen
+# one-liner and the batch export can't drift apart.
+_SUBMIT = 'sbatch submit_eval.sh'
+
 
 def build_command(row, metadata_dir=None):
     """The `submit_eval.sh` line for one EvalRow (always transfer learning —
@@ -119,7 +123,7 @@ def build_command(row, metadata_dir=None):
     generated script.
     """
     base = (metadata_dir or METADATA_DIR_PLACEHOLDER).rstrip('/')
-    return (f'submit_eval.sh "{base}/{row.full_metadata}.json" '
+    return (f'{_SUBMIT} "{base}/{row.full_metadata}.json" '
             f'"{row.selected_epoch}" "{row.full_checkpoint_metadata}" '
             f'"{row.finetune_epoch}"')
 
@@ -130,7 +134,7 @@ def command_for_winner(full_label, metadata_dir=None):
     Follows submit_eval.sh's argument contract, which takes a *path* to the
     metadata file and decides the mode purely from the positional count:
 
-      training run (no transfer)  ->  submit_eval.sh "<meta>.json" "<epoch>"
+      training run (no transfer)  ->  sbatch submit_eval.sh "<meta>.json" "<epoch>"
           the script then sets checkpoint_metadata=metadata, finetune_epoch=epoch
       transfer learning (finetune) ->  ... "<epoch>" "<ckpt_metadata>" "<ft_epoch>"
           where ckpt_metadata is a bare *name*, not a path
@@ -156,11 +160,11 @@ def command_for_winner(full_label, metadata_dir=None):
     ft = _FT_DIR_RE.match(dirname)
     if ft:
         meta, ckpt, fe = ft.group('meta'), ft.group('ckpt'), int(ft.group('fe'))
-        return (f'submit_eval.sh "{base}/{meta}.json" "{epoch}" '
+        return (f'{_SUBMIT} "{base}/{meta}.json" "{epoch}" '
                 f'"{ckpt}" "{fe}"')
     if _TRAIN_DIR_RE.match(dirname):
         # The whole dir name is the metadata; two args means "no transfer".
-        return f'submit_eval.sh "{base}/{dirname}.json" "{epoch}"'
+        return f'{_SUBMIT} "{base}/{dirname}.json" "{epoch}"'
     return None
 
 

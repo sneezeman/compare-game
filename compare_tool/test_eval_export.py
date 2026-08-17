@@ -105,13 +105,13 @@ def test_build_sh_uses_submit_eval():
     # Prompts once for the metadata dir, which every line then reuses.
     assert 'read -rp' in sh and 'metadir' in sh
     # One submit_eval.sh line per row; the older scripts are gone entirely.
-    assert sh.count('submit_eval.sh "$metadir/') == 2
+    assert sh.count('sbatch submit_eval.sh "$metadir/') == 2
     for gone in ('batch_eval.sh', 'eval_manual.sh', 'sed ', 'workdir'):
         assert gone not in sh, f'{gone!r} should no longer appear'
     # 4-arg transfer-learning form: path, epoch, checkpoint NAME, finetune epoch.
-    assert ('submit_eval.sh "$metadir/NM0029_HT_100nm_T001_0001_rec_.json" "142" '
+    assert ('sbatch submit_eval.sh "$metadir/NM0029_HT_100nm_T001_0001_rec_.json" "142" '
             '"NM0029_HT_100nm_T000_0001_rec_" "140"') in sh
-    assert ('submit_eval.sh "$metadir/NM0029_HT_100nm_T001_0001_rec_.json" "175" '
+    assert ('sbatch submit_eval.sh "$metadir/NM0029_HT_100nm_T001_0001_rec_.json" "175" '
             '"NM0029_HT_100nm_T014_0001_rec_" "170"') in sh
 
 
@@ -123,7 +123,7 @@ def test_build_sh_strips_trailing_slash_from_entered_dir():
 
 def test_command_for_winner_finetune_is_four_args():
     cmd = command_for_winner(f'{FT} Ep.142', metadata_dir='/data/d/denoising/metadata')
-    assert cmd == ('submit_eval.sh "/data/d/denoising/metadata/'
+    assert cmd == ('sbatch submit_eval.sh "/data/d/denoising/metadata/'
                    'NM0029_HT_100nm_T001_0001_rec_.json" "142" '
                    '"NM0029_HT_100nm_T000_0001_rec_" "140"')
     # 3rd arg is a bare checkpoint NAME, not a path
@@ -134,7 +134,7 @@ def test_command_for_winner_training_tile_is_two_args():
     # No transfer learning: submit_eval.sh derives checkpoint/finetune itself,
     # so only 2 positional arguments may be emitted (3 would be rejected).
     cmd = command_for_winner(f'{TR} Ep.30', metadata_dir='/data/d/denoising/metadata')
-    assert cmd == ('submit_eval.sh "/data/d/denoising/metadata/'
+    assert cmd == ('sbatch submit_eval.sh "/data/d/denoising/metadata/'
                    'NM0029_HT_100nm_T000_0001_rec_.json" "30"')
     assert cmd.count('"') == 4  # exactly two quoted args
 
@@ -144,13 +144,13 @@ def test_command_for_winner_training_tile_without_tile_token():
     gif = ('ls3640/tardi3_tun/corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_/'
            'all_epochs_view0_0-60_raw.gif')
     cmd = command_for_winner(f'{gif} Ep.55', metadata_dir='/m')
-    assert cmd == ('submit_eval.sh "/m/corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_.json" '
+    assert cmd == ('sbatch submit_eval.sh "/m/corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_.json" '
                    '"55"')
 
 
 def test_command_for_winner_placeholder_when_no_dir():
     cmd = command_for_winner(f'{TR} Ep.30')
-    assert cmd.startswith('submit_eval.sh "<METADATA_DIR>/')
+    assert cmd.startswith('sbatch submit_eval.sh "<METADATA_DIR>/')
     assert cmd.endswith('.json" "30"')
 
 
@@ -158,7 +158,7 @@ def test_command_for_winner_strips_trailing_slash():
     a = command_for_winner(f'{TR} Ep.30', metadata_dir='/data/m/')
     b = command_for_winner(f'{TR} Ep.30', metadata_dir='/data/m')
     assert a == b
-    assert '//' not in a.split('submit_eval.sh ')[1]
+    assert '//' not in a.split('sbatch submit_eval.sh ')[1]
 
 
 def test_command_for_winner_ignores_non_experiment_dirs():
