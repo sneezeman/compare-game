@@ -33,6 +33,10 @@ _FT_DIR_RE = re.compile(r'^(?P<meta>.+?_rec_)_from_(?P<ckpt>.+?_rec_)_(?P<fe>\d+
 # `..._T002_0001_rec_`, `..._T03_050nm_rec_`. The leading delimiter keeps the `T`
 # in tokens like `HT_100nm` from matching (its `T` isn't digit-led anyway).
 _TILE_RE = re.compile(r'(?:^|_)(T\d+)(?:_|$)')
+# A plain training-run directory: the whole dir name IS the metadata, ending in
+# `_rec_`/`_rec` (no `_from_` checkpoint). Tile names vary a lot across datasets
+# — some carry no T<number> token at all — so match only the _rec suffix.
+_TRAIN_DIR_RE = re.compile(r'^(?!.*_from_).+_rec_?$')
 
 
 def _parse_winner(top3):
@@ -99,6 +103,50 @@ def build_csv(rows):
 # takes it as the optional 5th arg; the user pastes their own path at runtime.
 _WORKDIR_EXAMPLE = ('/data/visitor/ls3639/id16a/20260211/'
                     'PROCESSED_DATA/NM0029/denoising/')
+
+
+def build_command(row):
+    """One copy-pastable sbatch line for a single EvalRow.
+
+    The workdir (batch_eval.sh's optional 5th arg) is deliberately omitted so
+    the line can be pasted and run as-is; batch_eval.sh then falls back to its
+    own DEFAULT_DATASET_DIR. Append a workdir argument to override it.
+    """
+    return (f'sbatch batch_eval.sh "{row.full_metadata}" "{row.selected_epoch}" '
+            f'"{row.full_checkpoint_metadata}" "{row.finetune_epoch}"')
+
+
+def command_for_winner(full_label):
+    """Eval command for a tournament winner, or None if one can't be built.
+
+    full_label is the app's '<gif path> Ep.<N>' candidate label — the same shape
+    the saved-results 'Top 3:' line uses, so finetune parsing is shared with
+    collect_eval_rows rather than duplicated.
+
+    Unlike the CSV/.sh batch export (finetune-only by design), this also covers
+    **training tiles**: batch_eval.sh evaluates those through its
+    `metadata == checkpoint_metadata` branch, reading
+    results/checkpoints/<metadata>/weights_epoch_<epoch>.torch. So the tile's own
+    metadata is repeated as the checkpoint and the epoch as finetune_epoch (that
+    argument is unused on that branch). Returns None when the path is not a
+    recognizable experiment directory.
+    """
+    if not full_label:
+        return None
+
+    rows = collect_eval_rows([{'top3': full_label}])
+    if rows:
+        return build_command(rows[0])
+
+    # Not a finetune experiment — try the training-tile form.
+    parsed = _parse_winner(full_label)
+    if not parsed:
+        return None
+    gif_path, epoch = parsed
+    dirname = os.path.basename(os.path.dirname(gif_path))
+    if not _TRAIN_DIR_RE.match(dirname):
+        return None
+    return (f'sbatch batch_eval.sh "{dirname}" "{epoch}" "{dirname}" "{epoch}"')
 
 
 def build_sh(rows):

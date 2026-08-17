@@ -209,6 +209,20 @@
             <h2>Tournament Results</h2>
             <div id="results-podium" class="results-podium"></div>
 
+            <div id="eval-command-box" style="display:none;">
+                <h3 class="eval-cmd-title">Run the evaluation for the winner</h3>
+                <div class="eval-cmd-row">
+                    <code id="eval-command-text" class="eval-cmd" title="Click to select"></code>
+                    <button id="eval-copy-btn" class="btn btn-secondary eval-cmd-copy"
+                            onclick="copyEvalCommand()">Copy</button>
+                </div>
+                <p class="eval-cmd-note">
+                    Run from the dataset's <code>denoising/</code> directory.
+                    Workdir is omitted, so <code>batch_eval.sh</code> uses its own
+                    <code>DEFAULT_DATASET_DIR</code> — append a path as a 5th argument to override it.
+                </p>
+            </div>
+
             <div id="top3-viewer-section" style="display:none; margin-top: 20px;">
                 <h3 style="color:#aaa; margin-bottom: 8px;">Top 3 — Final Look</h3>
                 <p class="center-row" style="margin: 4px 0 8px; color: #aaa;">

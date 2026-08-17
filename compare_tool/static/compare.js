@@ -1305,7 +1305,7 @@ async function startTournament() {
 
         // Handle immediate completion (e.g., 1 candidate after RAW exclusion)
         if (data.done) {
-            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command);
             return;
         }
 
@@ -1575,7 +1575,7 @@ async function submitChoice(winner) {
         }
 
         if (data.done) {
-            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command);
             return;
         }
 
@@ -1600,7 +1600,7 @@ async function finishEarly() {
         if (!resp.ok) { alert('Server error: ' + resp.status); return; }
         const data = await resp.json();
         if (data.done) {
-            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence);
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command);
         }
     } catch (e) {
         alert('Network error: ' + e.message);
@@ -1702,7 +1702,62 @@ document.addEventListener('keydown', (e) => {
     else if (e.code === 'ArrowRight') { e.preventDefault(); t3Nav(1); }
 });
 
-async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
+// Show the winner's copy-pastable eval command. Hidden when the server sent
+// none — training tiles have no checkpoint, so no eval command exists.
+function renderEvalCommand(cmd) {
+    const box = document.getElementById('eval-command-box');
+    const el = document.getElementById('eval-command-text');
+    if (!box || !el) return;
+    if (!cmd) {
+        box.style.display = 'none';
+        return;
+    }
+    el.textContent = cmd;
+    // Click the command to select it, so manual copy works even if the
+    // clipboard API is unavailable.
+    el.onclick = () => {
+        const r = document.createRange();
+        r.selectNodeContents(el);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+    };
+    box.style.display = '';
+}
+
+async function copyEvalCommand() {
+    const el = document.getElementById('eval-command-text');
+    const btn = document.getElementById('eval-copy-btn');
+    if (!el) return;
+    const text = el.textContent;
+    let ok = false;
+    try {
+        // Not available on insecure origins / older browsers — hence the fallback.
+        await navigator.clipboard.writeText(text);
+        ok = true;
+    } catch (e) {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            ok = document.execCommand('copy');
+            ta.remove();
+        } catch (e2) {
+            ok = false;
+        }
+    }
+    if (btn) {
+        const original = 'Copy';
+        btn.textContent = ok ? 'Copied!' : 'Press Ctrl+C';
+        if (!ok) el.click();  // select it so Ctrl+C works
+        setTimeout(() => { btn.textContent = original; }, 1800);
+    }
+}
+
+async function showResults(ranking, top3, serverMetrics, savePath, confidence, evalCommand) {
     showPhase('results');
     document.removeEventListener('keydown', handleTournamentKey);
 
@@ -1715,6 +1770,8 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence) {
         div.innerHTML = `<div class="rank">${medals[i]}</div><div class="epoch-num">${escapeHtml(top3[i].label)}</div>`;
         podium.appendChild(div);
     }
+
+    renderEvalCommand(evalCommand);
 
     // Top-3 ROI viewer for one last visual sanity check
     showTop3Viewer(top3);

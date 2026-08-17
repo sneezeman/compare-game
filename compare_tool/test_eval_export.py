@@ -1,6 +1,7 @@
 """Unit tests for the eval-export helpers (pure, no Flask)."""
 
-from eval_export import collect_eval_rows, build_csv, build_sh
+from eval_export import (collect_eval_rows, build_csv, build_sh,
+                         command_for_winner)
 
 # A finetune winner GIF: target T001 finetuned from T000 starting at epoch 140.
 FT = ('ls3639/NM0029/finetune/'
@@ -112,6 +113,42 @@ def test_build_sh_uses_batch_eval_with_args():
             '"NM0029_HT_100nm_T000_0001_rec_" "140" "$workdir"') in sh
     assert ('sbatch batch_eval.sh "NM0029_HT_100nm_T001_0001_rec_" "175" '
             '"NM0029_HT_100nm_T014_0001_rec_" "170" "$workdir"') in sh
+
+
+def test_command_for_winner_finetune():
+    cmd = command_for_winner(f'{FT} Ep.142')
+    assert cmd == ('sbatch batch_eval.sh "NM0029_HT_100nm_T001_0001_rec_" "142" '
+                   '"NM0029_HT_100nm_T000_0001_rec_" "140"')
+    # workdir intentionally omitted -> batch_eval.sh uses its DEFAULT_DATASET_DIR
+    assert '$workdir' not in cmd and 'WORKDIR' not in cmd
+
+
+def test_command_for_winner_training_tile_self_checkpoint():
+    # A training tile has no _from_ checkpoint, but batch_eval.sh evaluates one
+    # via its `metadata == checkpoint_metadata` branch, so metadata repeats.
+    cmd = command_for_winner(f'{TR} Ep.30')
+    assert cmd == ('sbatch batch_eval.sh "NM0029_HT_100nm_T000_0001_rec_" "30" '
+                   '"NM0029_HT_100nm_T000_0001_rec_" "30"')
+
+
+def test_command_for_winner_training_tile_without_tile_token():
+    # Live datasets include names with no T<number> token at all.
+    gif = ('ls3640/tardi3_tun/corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_/'
+           'all_epochs_view0_0-60_raw.gif')
+    cmd = command_for_winner(f'{gif} Ep.55')
+    assert cmd == ('sbatch batch_eval.sh "corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_" '
+                   '"55" "corrected_tardi3_tun_HT_real050nm_srs23_0001_rec_" "55"')
+
+
+def test_command_for_winner_ignores_non_experiment_dirs():
+    # A directory that isn't an experiment at all yields no command.
+    assert command_for_winner('some/random/folder/all_epochs_view0_0-9.gif') is None
+
+
+def test_command_for_winner_unparseable_is_none():
+    assert command_for_winner('') is None
+    assert command_for_winner('no epoch suffix here.gif') is None
+    assert command_for_winner(None) is None
 
 
 def test_empty_sh_has_no_jobs():

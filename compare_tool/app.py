@@ -22,7 +22,8 @@ from flask import (Flask, Response, g, jsonify, render_template, request,
 from PIL import Image
 
 import metrics_store
-from eval_export import build_csv, build_sh, collect_eval_rows
+from eval_export import (build_csv, build_sh, collect_eval_rows,
+                         command_for_winner)
 from precompute import (build_worklist, is_idle, scan_is_settled,
                         sibling_filenames)
 from gif_loader import (compute_label_exclusion, compute_variability_map,
@@ -1204,6 +1205,10 @@ def tournament_choice(session_id):
 
         result['ranking'] = ranking
         result['top3'] = top3
+        # Copy-pastable eval command for the winner (None for training tiles,
+        # which have no checkpoint to evaluate against).
+        result['eval_command'] = command_for_winner(
+            ranking[0].get('full_label') if ranking else None)
         result['confidence'] = confidence
         result['all_metrics'] = [
             [{'name': n, 'value': round(v, 6), 'higher_is_better': h} for n, v, h in m]
@@ -1281,6 +1286,9 @@ def tournament_finish(session_id):
         'done': True,
         'ranking': ranking,
         'top3': top3,
+        # Copy-pastable eval command for the winner (see tournament_choice).
+        'eval_command': command_for_winner(
+            ranking[0].get('full_label') if ranking else None),
         'confidence': confidence,
         'all_metrics': [
             [{'name': n, 'value': round(v, 6), 'higher_is_better': h} for n, v, h in m]

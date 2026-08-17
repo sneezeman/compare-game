@@ -975,3 +975,61 @@ kbd.kbd {
     background: rgba(255, 217, 61, 0.1);
     border-radius: 6px;
 }
+
+/* Winner's copy-pastable eval command (results screen) */
+#eval-command-box {
+    margin: 18px auto 0;
+    max-width: 900px;
+    padding: 12px 14px;
+    background: #0f1a33;
+    border: 1px solid #2a3a5a;
+    border-radius: 8px;
+}
+
+.eval-cmd-title {
+    color: #aaa;
+    margin: 0 0 8px;
+    font-size: 1em;
+}
+
+.eval-cmd-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.eval-cmd {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    background: #0a1224;
+    border: 1px solid #2a3a5a;
+    border-radius: 6px;
+    color: #4ecdc4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    cursor: text;
+    user-select: all;
+}
+
+.eval-cmd-copy {
+    flex-shrink: 0;
+    align-self: center;
+    padding: 6px 14px;
+}
+
+.eval-cmd-note {
+    margin: 8px 0 0;
+    color: #888;
+    font-size: 0.8em;
+}
+
+.eval-cmd-note code {
+    color: #aaa;
+    background: #0a1224;
+    padding: 1px 4px;
+    border-radius: 3px;
+}
