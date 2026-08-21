@@ -112,7 +112,7 @@ METADATA_DIR_PLACEHOLDER = '<METADATA_DIR>'
 
 # How every generated eval line starts. One constant so the results-screen
 # one-liner and the batch export can't drift apart.
-_SUBMIT = 'sbatch submit_eval.sh'
+_SUBMIT = './submit_eval.sh'
 
 
 def build_command(row, metadata_dir=None):
@@ -134,7 +134,7 @@ def command_for_winner(full_label, metadata_dir=None):
     Follows submit_eval.sh's argument contract, which takes a *path* to the
     metadata file and decides the mode purely from the positional count:
 
-      training run (no transfer)  ->  sbatch submit_eval.sh "<meta>.json" "<epoch>"
+      training run (no transfer)  ->  ./submit_eval.sh "<meta>.json" "<epoch>"
           the script then sets checkpoint_metadata=metadata, finetune_epoch=epoch
       transfer learning (finetune) ->  ... "<epoch>" "<ckpt_metadata>" "<ft_epoch>"
           where ckpt_metadata is a bare *name*, not a path
