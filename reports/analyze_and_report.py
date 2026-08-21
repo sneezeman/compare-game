@@ -122,6 +122,27 @@ def classify_file(info):
 # tightened tournament + ROI tooling starting April 2026.
 RECENT_CUTOFF = '2026-04-01'
 
+# A date-split comparison needs a few tournaments on BOTH sides to say anything.
+# Below this, the section is replaced by a one-line note instead of a table that
+# would report, say, a "100% top-1" metric derived from a single tournament.
+MIN_ERA_N = 3
+
+
+def rater_names(files):
+    """Distinct rater names in a set of parsed results, case-insensitively.
+
+    The same person can appear under different capitalisation ('Artem' vs the
+    login name 'artem'), so fold on lowercase and show the commonest spelling.
+    """
+    from collections import Counter
+    by_key = {}
+    for f in files:
+        name = (f.get('user') or '').strip()
+        if not name:
+            continue
+        by_key.setdefault(name.lower(), Counter())[name] += 1
+    return sorted(c.most_common(1)[0][0] for c in by_key.values())
+
 
 def file_yearmonth(info):
     """Extract YYYY-MM from the parsed Date header (preferred) or filename."""
@@ -470,7 +491,8 @@ def generate_elimination_table(elim_results, metric_names, title, n_files):
 def generate_recent_vs_older_section(recent_results, older_results,
                                      recent_elim, older_elim,
                                      metric_names,
-                                     n_recent, n_older):
+                                     n_recent, n_older,
+                                     recent_raters=(), older_raters=()):
     """Side-by-side comparison of training-tile metrics: recent vs older."""
     if not (recent_results and older_results):
         return ''
@@ -493,13 +515,31 @@ def generate_recent_vs_older_section(recent_results, older_results,
                  'tool (label-corner masking, finer ROI, pre-filter) — does '
                  'this give more conclusive metric performance?')
     lines.append('')
-    lines.append(r'\textbf{Confound:} the recent batch is rated entirely by '
-                 r'one user (Artem) while the older batch is rated entirely '
-                 r'by others. Splitting by rater would produce the exact same '
-                 r'partition, so any "recent improvement" signal can be '
-                 r'equally well explained by either rater behavior or tool '
-                 r'changes — disentangling them requires the older raters to '
-                 r'redo a few tournaments with the updated tool.')
+    # Stating who rated what, from the data — a hardcoded claim here goes stale
+    # the moment new raters appear.
+    def _fmt(names):
+        names = [n.replace('_', r'\_') for n in names]
+        if not names:
+            return 'unattributed tournaments'
+        if len(names) == 1:
+            return names[0]
+        return ', '.join(names[:-1]) + ' and ' + names[-1]
+
+    r_set, o_set = {n.lower() for n in recent_raters}, {n.lower() for n in older_raters}
+    if r_set and o_set and not (r_set & o_set):
+        lines.append(r'\textbf{Confound:} the recent batch is rated by '
+                     + _fmt(recent_raters)
+                     + r' while the older batch is rated by '
+                     + _fmt(older_raters)
+                     + r'. The rater split matches the date split exactly, so any '
+                     r'"recent improvement" can be explained equally well by rater '
+                     r'behaviour or by the tool changes — separating them needs the '
+                     r'older raters to redo a few tournaments with the updated tool.')
+    elif r_set or o_set:
+        lines.append(r'\textbf{Raters:} recent — ' + _fmt(recent_raters)
+                     + r'; older — ' + _fmt(older_raters)
+                     + r'. The two batches share at least one rater, so the date '
+                     r'split is not purely a rater split.')
     lines.append('')
 
     smaller = min(n_recent, n_older)
@@ -634,7 +674,8 @@ def generate_report(training_results, finetuning_results, clusters,
                     output_path,
                     recent_results=None, older_results=None,
                     recent_elim=None, older_elim=None,
-                    n_recent=0, n_older=0):
+                    n_recent=0, n_older=0,
+                    recent_raters=(), older_raters=()):
     """Generate the full LaTeX report."""
 
     # Determine best metrics for findings
@@ -647,6 +688,7 @@ def generate_report(training_results, finetuning_results, clusters,
     lines = []
     lines.append(r"""\documentclass[11pt]{article}
 \usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}  % \text{} in the metric definitions
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{xcolor}
@@ -691,12 +733,29 @@ For reference, chance-level performance for random selection: training tiles ($\
             'Training Tiles', n_training, 37))
 
     # Recent vs Older training-tile comparison
-    rvo = generate_recent_vs_older_section(
-        recent_results, older_results, recent_elim, older_elim,
-        training_metric_names, n_recent, n_older,
-    ) if recent_results and older_results else ''
-    if rvo:
-        lines.append(rvo)
+    have_eras = bool(recent_results and older_results)
+    if have_eras and min(n_recent, n_older) >= MIN_ERA_N:
+        rvo = generate_recent_vs_older_section(
+            recent_results, older_results, recent_elim, older_elim,
+            training_metric_names, n_recent, n_older,
+            recent_raters=recent_raters, older_raters=older_raters,
+        )
+        if rvo:
+            lines.append(rvo)
+    elif have_eras:
+        # One side is too small to compare — say so rather than tabulating a
+        # rate computed from one or two tournaments.
+        lines.append(r'\section{Training Tiles: Recent vs.\ Older Data}')
+        lines.append('')
+        lines.append(
+            f'Training-tile tournaments split by date: '
+            f'\\textbf{{{n_recent} recent}} (on/after {RECENT_CUTOFF}) vs.\\ '
+            f'\\textbf{{{n_older} older}} (before). With fewer than {MIN_ERA_N} '
+            f'tournaments on one side, a side-by-side comparison would report '
+            f'rates derived from almost no data, so it is omitted here. '
+            f'Essentially all training-tile data now comes from the recent, '
+            f'updated-tool era.')
+        lines.append('')
 
     # Finetuning results
     if finetuning_results:
@@ -1026,6 +1085,8 @@ def main():
         recent_results=recent_results, older_results=older_results,
         recent_elim=recent_elim, older_elim=older_elim,
         n_recent=len(training_recent), n_older=len(training_older),
+        recent_raters=rater_names(training_recent),
+        older_raters=rater_names(training_older),
     )
 
     if args.compile:

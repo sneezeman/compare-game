@@ -1,5 +1,6 @@
 \documentclass[11pt]{article}
 \usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}  % \text{} in the metric definitions
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{xcolor}
@@ -10,7 +11,7 @@
 \definecolor{midrow}{HTML}{FFF8E1}
 \definecolor{botrow}{HTML}{FFEBEE}
 
-\title{Image Quality Metrics for X-ray Tomography Epoch Selection\\[4pt]\large Analysis of 97 Human Comparison Tournaments}
+\title{Image Quality Metrics for X-ray Tomography Epoch Selection\\[4pt]\large Analysis of 182 Human Comparison Tournaments}
 \author{Compare Game Analysis}
 \date{\today}
 
@@ -23,7 +24,7 @@ When denoising X-ray tomography reconstructions with iterative deep learning met
 
 We built a pairwise comparison tool where users compare epoch pairs side-by-side in a merge-sort tournament and select the better-looking reconstruction. The tool also computes image quality metrics on each candidate. By comparing the human rankings with each metric's ranking, we evaluate which metrics best predict human visual judgment.
 
-There are two experimental modes. \textbf{Training tiles} (17 tournaments): initial training runs with wide epoch ranges and large quality differences. \textbf{Finetuning} (80 tournaments): starting from a pre-trained checkpoint with much smaller differences between candidates.
+There are two experimental modes. \textbf{Training tiles} (36 tournaments): initial training runs with wide epoch ranges and large quality differences. \textbf{Finetuning} (146 tournaments): starting from a pre-trained checkpoint with much smaller differences between candidates.
 
 The tournament uses a merge-sort algorithm with top\_k=3, meaning only the top-3 positions are reliably ordered. All analysis uses \emph{only} the top-3 positions:
 
@@ -36,7 +37,7 @@ These can diverge: a metric whose \#1 is reliably in the human's top-3 but whose
 
 For reference, chance-level performance for random selection: training tiles ($\sim$37 candidates) have $\sim$8\% top-1 ID rate; finetuning ($\sim$20 candidates) have $\sim$15\% top-1 ID rate. Note that training tile tournaments include 3 views of the same tomograms, so the effective sample size is smaller than the file count suggests.
 
-\section{Results: Training Tiles (17 tournaments)}
+\section{Results: Training Tiles (36 tournaments)}
 
 \vspace{0.5em}
 \begin{center}
@@ -45,93 +46,34 @@ For reference, chance-level performance for random selection: training tiles ($\
 \toprule
 \textbf{Rank} & \textbf{Metric} & \textbf{Top-3 Agree.} & \textbf{Top-1 ID Rate} \\
 \midrule
-1 & Tenengrad & 33\% & 29\% \\
-2 & HF Energy & 27\% & 24\% \\
-3 & Laplacian Var & 31\% & 24\% \\
-4 & Local Std & 35\% & 24\% \\
-5 & SML & 29\% & 24\% \\
-6 & Wavelet E.R. & 33\% & 24\% \\
-\rowcolor{botrow} 7 & Brenner & 22\% & 18\% \\
-\rowcolor{botrow} 8 & Hist. Entropy & 27\% & 18\% \\
-\rowcolor{botrow} 9 & Norm. Var. & 24\% & 18\% \\
-\rowcolor{botrow} 10 & Spec. Struct. (inv.) & 27\% & 18\% \\
-\rowcolor{botrow} 11 & Vollath F4 & 22\% & 18\% \\
-\rowcolor{botrow} 12 & Vollath F5 & 27\% & 18\% \\
-\rowcolor{botrow} 13 & Kurtosis (inv.) & 24\% & 12\% \\
-\rowcolor{botrow} 14 & NDCTBE & 18\% & 12\% \\
-\rowcolor{botrow} 15 & Spec. Slope & 8\% & 12\% \\
-\rowcolor{botrow} 16 & DCTS & 20\% & 6\% \\
-\midrule
-\multicolumn{4}{l}{\textit{All other metrics have top-1 ID rate $\leq$ 6\% (chance level).}} \\
+\rowcolor{toprow} 1 & LoG Response & 69\% & \textbf{78\%} \\
+\rowcolor{toprow} 2 & Local Std & 68\% & \textbf{75\%} \\
+\rowcolor{toprow} 3 & Tenengrad & 63\% & \textbf{75\%} \\
+\rowcolor{toprow} 4 & Laplacian Var & 58\% & \textbf{69\%} \\
+\rowcolor{toprow} 5 & Vollath F4 & 65\% & \textbf{69\%} \\
+\rowcolor{toprow} 6 & Brenner & 65\% & \textbf{67\%} \\
+\rowcolor{toprow} 7 & Contrast Con. & 56\% & \textbf{67\%} \\
+\rowcolor{toprow} 8 & SML & 62\% & \textbf{67\%} \\
+\rowcolor{toprow} 9 & Spec. Struct. (inv.) & 59\% & \textbf{67\%} \\
+\rowcolor{toprow} 10 & Wavelet E.R. & 65\% & \textbf{67\%} \\
+\rowcolor{toprow} 11 & HF Energy & 58\% & \textbf{64\%} \\
+\rowcolor{toprow} 12 & NHWTSE & 56\% & \textbf{64\%} \\
+\rowcolor{toprow} 13 & Hist. Entropy & 56\% & \textbf{61\%} \\
+\rowcolor{toprow} 14 & Vollath F5 & 52\% & \textbf{61\%} \\
+\rowcolor{toprow} 15 & Spec. Slope & 54\% & \textbf{58\%} \\
+\rowcolor{toprow} 16 & Kurtosis (inv.) & 56\% & \textbf{56\%} \\
+\rowcolor{toprow} 17 & Norm. Var. & 53\% & \textbf{56\%} \\
+\rowcolor{toprow} 18 & DCTS & 57\% & \textbf{50\%} \\
+\rowcolor{toprow} 19 & NDCTBE & 55\% & \textbf{47\%} \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 \section{Training Tiles: Recent vs.\ Older Data}
 
-Training-tile tournaments split by date: \textbf{4 recent} (on/after 2026-04-01) vs.\ \textbf{13 older} (before). The recent batch was collected with the updated comparison tool (label-corner masking, finer ROI, pre-filter) — does this give more conclusive metric performance?
+Training-tile tournaments split by date: \textbf{35 recent} (on/after 2026-04-01) vs.\ \textbf{1 older} (before). With fewer than 3 tournaments on one side, a side-by-side comparison would report rates derived from almost no data, so it is omitted here. Essentially all training-tile data now comes from the recent, updated-tool era.
 
-\textbf{Confound:} the recent batch is rated entirely by one user (Artem) while the older batch is rated entirely by others. Splitting by rater would produce the exact same partition, so any "recent improvement" signal can be equally well explained by either rater behavior or tool changes — disentangling them requires the older raters to redo a few tournaments with the updated tool.
-
-\textbf{Note on sample size.} 
-The smaller side has 4 tournaments, so individual percentages should be read as $\pm$15\,pp; pay attention to the \emph{direction and magnitude} of the gap across many metrics rather than any single row.
-
-\vspace{0.5em}
-\begin{center}
-\small
-\begin{tabular}{lcccc}
-\toprule
- & \multicolumn{2}{c}{\textbf{Recent (4)}} & \multicolumn{2}{c}{\textbf{Older (13)}} \\
-\cmidrule(lr){2-3} \cmidrule(lr){4-5}
-\textbf{Metric} & Top-3 & Top-1 & Top-3 & Top-1 \\
-\midrule
-\rowcolor{toprow} HF Energy & 50\% & 75\% & 21\% & 8\% \\
-\rowcolor{toprow} Laplacian Var & 50\% & 75\% & 26\% & 8\% \\
-\rowcolor{toprow} Local Std & 50\% & 75\% & 31\% & 8\% \\
-\rowcolor{toprow} SML & 50\% & 75\% & 23\% & 8\% \\
-\rowcolor{toprow} Tenengrad & 50\% & 75\% & 28\% & 15\% \\
-\rowcolor{toprow} Wavelet E.R. & 50\% & 75\% & 28\% & 8\% \\
-\rowcolor{toprow} Brenner & 42\% & 50\% & 15\% & 8\% \\
-\rowcolor{toprow} Hist. Entropy & 33\% & 50\% & 26\% & 8\% \\
-\rowcolor{toprow} Norm. Var. & 33\% & 50\% & 21\% & 8\% \\
-\rowcolor{toprow} Spec. Struct. (inv.) & 33\% & 50\% & 26\% & 8\% \\
-\rowcolor{toprow} Vollath F4 & 42\% & 50\% & 15\% & 8\% \\
-\rowcolor{toprow} Vollath F5 & 25\% & 50\% & 28\% & 8\% \\
-\rowcolor{toprow} Kurtosis (inv.) & 42\% & 25\% & 18\% & 8\% \\
-\rowcolor{toprow} NHWTSE & 17\% & 25\% & 3\% & 0\% \\
-Spec. Slope (inv.) & 17\% & 25\% & 8\% & 15\% \\
-DCTS & 25\% & 0\% & 18\% & 8\% \\
-\rowcolor{botrow} NDCTBE & 17\% & 0\% & 18\% & 15\% \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\paragraph{Summary.} 
-Recent batch average top-1 ID rate is \textbf{49\%} (top-3 agreement 37\%), vs.\ \textbf{9\%} (top-3 agreement 21\%) for the older batch --- much higher --- likely a real effect, the gap is too wide to be sample noise. Best recent metric: HF Energy (75\% top-1). Best older metric: Tenengrad (15\% top-1).
-
-\paragraph{Safe elimination at 50\% cut.} How often all three human top-3 picks survive cutting half the candidates by each metric:
-\vspace{0.3em}
-\begin{center}
-\small
-\begin{tabular}{lcc}
-\toprule
-\textbf{Metric} & \textbf{Recent} & \textbf{Older} \\
-\midrule
-Wavelet E.R. & 75\% & 85\% \\
-\rowcolor{botrow} HF Energy & 50\% & 69\% \\
-\rowcolor{botrow} Local Std & 50\% & 77\% \\
-\rowcolor{botrow} Hist. Entropy & 50\% & 77\% \\
-\rowcolor{botrow} Spec. Struct. (inv.) & 50\% & 69\% \\
-\rowcolor{toprow} Kurtosis (inv.) & 100\% & 54\% \\
-SML & 75\% & 69\% \\
-\rowcolor{botrow} Laplacian Var & 50\% & 77\% \\
-\rowcolor{botrow} Tenengrad & 50\% & 85\% \\
-\rowcolor{botrow} Brenner & 50\% & 85\% \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\section{Results: Finetuning (80 tournaments)}
+\section{Results: Finetuning (146 tournaments)}
 
 \vspace{0.5em}
 \begin{center}
@@ -140,30 +82,30 @@ SML & 75\% & 69\% \\
 \toprule
 \textbf{Rank} & \textbf{Metric} & \textbf{Top-3 Agree.} & \textbf{Top-1 ID Rate} \\
 \midrule
-\rowcolor{toprow} 1 & Local Std & 54\% & \textbf{69\%} \\
-\rowcolor{toprow} 2 & Tenengrad & 53\% & \textbf{68\%} \\
-\rowcolor{toprow} 3 & Wavelet E.R. & 56\% & \textbf{68\%} \\
-\rowcolor{toprow} 4 & LoG Response & 54\% & \textbf{65\%} \\
-\rowcolor{toprow} 5 & Spec. Struct. (inv.) & 54\% & \textbf{65\%} \\
-\rowcolor{toprow} 6 & Brenner & 53\% & \textbf{62\%} \\
-\rowcolor{toprow} 7 & Laplacian Var & 55\% & \textbf{62\%} \\
-\rowcolor{toprow} 8 & SML & 55\% & \textbf{62\%} \\
-\rowcolor{toprow} 9 & Vollath F4 & 54\% & \textbf{60\%} \\
-\rowcolor{toprow} 10 & HF Energy & 54\% & \textbf{57\%} \\
-\rowcolor{toprow} 11 & Hist. Entropy & 45\% & \textbf{51\%} \\
-\rowcolor{toprow} 12 & Contrast Con. & 41\% & \textbf{50\%} \\
-\rowcolor{toprow} 13 & Norm. Var. & 42\% & \textbf{46\%} \\
-\rowcolor{toprow} 14 & DCTS & 41\% & \textbf{45\%} \\
-\rowcolor{toprow} 15 & Vollath F5 & 41\% & \textbf{45\%} \\
-\rowcolor{midrow} 16 & Kurtosis (inv.) & 39\% & 44\% \\
-\rowcolor{midrow} 17 & NDCTBE & 39\% & 42\% \\
-\rowcolor{midrow} 18 & NHWTSE & 42\% & 42\% \\
-\rowcolor{midrow} 19 & Spec. Slope & 30\% & 34\% \\
+\rowcolor{toprow} 1 & Tenengrad & 59\% & \textbf{69\%} \\
+\rowcolor{toprow} 2 & Local Std & 58\% & \textbf{68\%} \\
+\rowcolor{toprow} 3 & Spec. Struct. (inv.) & 58\% & \textbf{68\%} \\
+\rowcolor{toprow} 4 & Wavelet E.R. & 59\% & \textbf{68\%} \\
+\rowcolor{toprow} 5 & LoG Response & 59\% & \textbf{67\%} \\
+\rowcolor{toprow} 6 & Brenner & 58\% & \textbf{66\%} \\
+\rowcolor{toprow} 7 & Laplacian Var & 58\% & \textbf{66\%} \\
+\rowcolor{toprow} 8 & HF Energy & 58\% & \textbf{65\%} \\
+\rowcolor{toprow} 9 & Vollath F4 & 59\% & \textbf{65\%} \\
+\rowcolor{toprow} 10 & SML & 59\% & \textbf{64\%} \\
+\rowcolor{toprow} 11 & Contrast Con. & 46\% & \textbf{57\%} \\
+\rowcolor{toprow} 12 & DCTS & 47\% & \textbf{52\%} \\
+\rowcolor{toprow} 13 & Hist. Entropy & 50\% & \textbf{52\%} \\
+\rowcolor{toprow} 14 & Vollath F5 & 48\% & \textbf{51\%} \\
+\rowcolor{toprow} 15 & NDCTBE & 46\% & \textbf{51\%} \\
+\rowcolor{toprow} 16 & NHWTSE & 49\% & \textbf{49\%} \\
+\rowcolor{toprow} 17 & Norm. Var. & 48\% & \textbf{49\%} \\
+\rowcolor{toprow} 18 & Kurtosis (inv.) & 44\% & \textbf{47\%} \\
+\rowcolor{toprow} 19 & Spec. Slope & 42\% & \textbf{45\%} \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\section{Safe Elimination: Finetuning (80 tournaments)}
+\section{Safe Elimination: Finetuning (146 tournaments)}
 
 If we use a metric to discard the worst candidates before human inspection, 
 how often do \emph{all three} human-preferred epochs survive the cut? 
@@ -177,30 +119,30 @@ throw away half the candidates by that metric without losing any human favorite.
 \toprule
 \textbf{\#} & \textbf{Metric} & \textbf{Cut 25\%} & \textbf{Cut 50\%} & \textbf{Cut 75\%} \\
 \midrule
-\rowcolor{midrow} 1 & Tenengrad & 95\% & 70\% & 34\% \\
-\rowcolor{midrow} 2 & Brenner & 92\% & 68\% & 31\% \\
-\rowcolor{midrow} 3 & Wavelet E.R. & 92\% & 68\% & 31\% \\
-\rowcolor{midrow} 4 & Vollath F4 & 92\% & 62\% & 31\% \\
-5 & Local Std & 95\% & 65\% & 30\% \\
-6 & SML & 92\% & 68\% & 28\% \\
-7 & HF Energy & 89\% & 64\% & 28\% \\
-8 & LoG Response & 95\% & 66\% & 27\% \\
-9 & Spec. Struct. (inv.) & 93\% & 62\% & 27\% \\
-10 & Laplacian Var & 92\% & 69\% & 26\% \\
-11 & NDCTBE & 68\% & 39\% & 18\% \\
-12 & DCTS & 73\% & 43\% & 16\% \\
-\rowcolor{botrow} 13 & Contrast Con. & 70\% & 45\% & 15\% \\
-\rowcolor{botrow} 14 & Norm. Var. & 69\% & 42\% & 14\% \\
-\rowcolor{botrow} 15 & NHWTSE & 74\% & 41\% & 14\% \\
-\rowcolor{botrow} 16 & Hist. Entropy & 86\% & 53\% & 12\% \\
-\rowcolor{botrow} 17 & Vollath F5 & 73\% & 45\% & 12\% \\
-\rowcolor{botrow} 18 & Kurtosis (inv.) & 72\% & 38\% & 7\% \\
-\rowcolor{botrow} 19 & Spec. Slope & 58\% & 18\% & 3\% \\
+1 & Tenengrad & 87\% & 62\% & 27\% \\
+2 & SML & 82\% & 57\% & 25\% \\
+3 & Brenner & 86\% & 55\% & 25\% \\
+4 & Vollath F4 & 85\% & 53\% & 24\% \\
+5 & LoG Response & 87\% & 55\% & 23\% \\
+6 & Wavelet E.R. & 82\% & 54\% & 23\% \\
+7 & Local Std & 86\% & 54\% & 22\% \\
+8 & HF Energy & 83\% & 52\% & 22\% \\
+9 & Laplacian Var & 86\% & 58\% & 20\% \\
+10 & Spec. Struct. (inv.) & 87\% & 50\% & 20\% \\
+\rowcolor{botrow} 11 & NDCTBE & 63\% & 34\% & 14\% \\
+\rowcolor{botrow} 12 & Vollath F5 & 68\% & 39\% & 13\% \\
+\rowcolor{botrow} 13 & DCTS & 68\% & 37\% & 12\% \\
+\rowcolor{botrow} 14 & Contrast Con. & 66\% & 34\% & 12\% \\
+\rowcolor{botrow} 15 & Norm. Var. & 66\% & 34\% & 11\% \\
+\rowcolor{botrow} 16 & Hist. Entropy & 77\% & 43\% & 10\% \\
+\rowcolor{botrow} 17 & NHWTSE & 66\% & 32\% & 10\% \\
+\rowcolor{botrow} 18 & Spec. Slope & 62\% & 24\% & 6\% \\
+\rowcolor{botrow} 19 & Kurtosis (inv.) & 63\% & 28\% & 5\% \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\section{Safe Elimination: Training Tiles (17 tournaments)}
+\section{Safe Elimination: Training Tiles (36 tournaments)}
 
 If we use a metric to discard the worst candidates before human inspection, 
 how often do \emph{all three} human-preferred epochs survive the cut? 
@@ -214,23 +156,25 @@ throw away half the candidates by that metric without losing any human favorite.
 \toprule
 \textbf{\#} & \textbf{Metric} & \textbf{Cut 25\%} & \textbf{Cut 50\%} & \textbf{Cut 75\%} \\
 \midrule
-\rowcolor{toprow} 1 & Wavelet E.R. & 94\% & 82\% & 59\% \\
-\rowcolor{toprow} 2 & Local Std & 100\% & 71\% & 59\% \\
-\rowcolor{toprow} 3 & HF Energy & 100\% & 65\% & 53\% \\
-\rowcolor{midrow} 4 & Brenner & 100\% & 76\% & 41\% \\
-\rowcolor{midrow} 5 & Tenengrad & 100\% & 76\% & 41\% \\
-\rowcolor{midrow} 6 & Hist. Entropy & 100\% & 71\% & 41\% \\
-\rowcolor{midrow} 7 & Laplacian Var & 94\% & 71\% & 41\% \\
-\rowcolor{midrow} 8 & SML & 94\% & 71\% & 41\% \\
-\rowcolor{midrow} 9 & Vollath F4 & 88\% & 82\% & 35\% \\
-\rowcolor{midrow} 10 & Spec. Struct. (inv.) & 100\% & 65\% & 35\% \\
-11 & Norm. Var. & 88\% & 65\% & 24\% \\
-12 & Vollath F5 & 88\% & 65\% & 24\% \\
-13 & Kurtosis (inv.) & 82\% & 65\% & 24\% \\
-14 & DCTS & 82\% & 53\% & 24\% \\
-\rowcolor{botrow} 15 & NDCTBE & 82\% & 53\% & 12\% \\
-\rowcolor{botrow} 16 & NHWTSE & 88\% & 47\% & 6\% \\
-\rowcolor{botrow} 17 & Spec. Slope (inv.) & 65\% & 18\% & 6\% \\
+\rowcolor{toprow} 1 & Local Std & 72\% & 62\% & 53\% \\
+\rowcolor{toprow} 2 & LoG Response & 75\% & 66\% & 50\% \\
+\rowcolor{midrow} 3 & Wavelet E.R. & 75\% & 56\% & 41\% \\
+\rowcolor{midrow} 4 & SML & 69\% & 53\% & 38\% \\
+\rowcolor{midrow} 5 & HF Energy & 75\% & 53\% & 34\% \\
+\rowcolor{midrow} 6 & Tenengrad & 69\% & 53\% & 34\% \\
+\rowcolor{midrow} 7 & Laplacian Var & 69\% & 44\% & 34\% \\
+\rowcolor{midrow} 8 & Spec. Struct. (inv.) & 66\% & 50\% & 31\% \\
+\rowcolor{midrow} 9 & Contrast Con. & 59\% & 44\% & 31\% \\
+10 & Brenner & 69\% & 50\% & 25\% \\
+11 & Vollath F4 & 66\% & 50\% & 22\% \\
+12 & Hist. Entropy & 59\% & 38\% & 22\% \\
+13 & Spec. Slope & 50\% & 34\% & 22\% \\
+14 & NHWTSE & 59\% & 31\% & 22\% \\
+15 & Kurtosis (inv.) & 59\% & 44\% & 19\% \\
+16 & DCTS & 62\% & 38\% & 19\% \\
+17 & Norm. Var. & 59\% & 41\% & 16\% \\
+18 & NDCTBE & 53\% & 34\% & 16\% \\
+19 & Vollath F5 & 47\% & 31\% & 16\% \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -248,20 +192,19 @@ Clusters of metrics with Pearson $|r| > 0.95$ (carrying the same information):
 1 & Brenner, Vollath F4 & 0.99 \\
 2 & DCTS, NDCTBE & 0.99 \\
 3 & HF Energy, Spec. Struct. & 0.97 \\
-4 & Laplacian Var, SML & 0.98 \\
-5 & LoG Response, Local Std, Tenengrad & 0.98--1.00 \\
+4 & LoG Response, Local Std & 1.00 \\
+5 & SML, Tenengrad & 0.95 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 \section{Key Findings}
 \begin{enumerate}
-\item \textbf{Metrics work dramatically better for finetuning than for training tiles.} Best finetuning metric: 69\% top-1 ID rate (Local Std). Training tile metrics are at chance level.
-\item \textbf{No single metric is sufficient.} Even for finetuning, the best metric misses the human top-3 46\% of the time. Human visual comparison remains necessary.
-\item \textbf{Local Std is the most practically useful metric} for finetuning (69\% top-1 ID rate).
-\item \textbf{Metrics are more reliable for eliminating the worst than for picking the best.} Tenengrad safely eliminates 50\% of candidates while preserving all human top-3 picks in 70\% of tournaments. Recommended workflow: use metrics to pre-filter, then compare the survivors visually.
-\item \textbf{Recent training-tile data is far more conclusive than older data} — average top-1 ID rate jumped from 9\% (n=13) to 49\% (n=4), with the best metrics now matching finetuning-grade performance. Plausibly driven by the updated tool (label-corner masking, pre-filter, finer ROI) plus more consistent rater behavior.
-\item \textbf{6 of 19 metrics can be dropped} without losing information (redundant within clusters).
+\item \textbf{Metrics work dramatically better for finetuning than for training tiles.} Best finetuning metric: 69\% top-1 ID rate (Tenengrad). Training tile metrics are at chance level.
+\item \textbf{No single metric is sufficient.} Even for finetuning, the best metric misses the human top-3 41\% of the time. Human visual comparison remains necessary.
+\item \textbf{Tenengrad is the most practically useful metric} for finetuning (69\% top-1 ID rate).
+\item \textbf{Metrics are more reliable for eliminating the worst than for picking the best.} Tenengrad safely eliminates 50\% of candidates while preserving all human top-3 picks in 62\% of tournaments. Recommended workflow: use metrics to pre-filter, then compare the survivors visually.
+\item \textbf{5 of 19 metrics can be dropped} without losing information (redundant within clusters).
 \end{enumerate}
 
 \appendix
