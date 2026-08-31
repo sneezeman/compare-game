@@ -29,7 +29,9 @@ from precompute import (build_worklist, is_idle, scan_is_settled,
 from gif_loader import (compute_label_exclusion, compute_variability_map,
                         detect_label_present, extract_frames, suggest_rois,
                         variability_to_heatmap_rgba)
-from metrics import compute_all, compute_metric_zscores, METRIC_GROUPS, ELIMINATION_METRICS
+from metrics import (compute_all, compute_metric_zscores, METRIC_GROUPS,
+                     ELIMINATION_METRICS, ELIMINATION_SETS,
+                     ELIMINATION_METRIC_UNION, DEFAULT_ELIMINATION_SET)
 from tournament import Tournament
 
 app = Flask(__name__)
@@ -660,7 +662,10 @@ def prefilter_list():
         return jsonify(error='Too few candidates for pre-filtering'), 400
 
     return jsonify(candidates=candidates, has_roi=bool(roi),
-                   elimination_metrics=ELIMINATION_METRICS)
+                   # Kept for older clients; equals the default set.
+                   elimination_metrics=ELIMINATION_METRICS,
+                   elimination_sets=ELIMINATION_SETS,
+                   default_elimination_set=DEFAULT_ELIMINATION_SET)
 
 
 @app.route('/api/prefilter-metric', methods=['POST'])
@@ -683,8 +688,11 @@ def prefilter_metric():
         return jsonify(error='Invalid epoch'), 400
 
     metrics = _get_cached_metrics(exp_id, epoch, roi, r_o)
+    # Union of all sets, not just the active one: compute_all produces every
+    # metric anyway, so returning them lets the client re-rank on a set switch
+    # without another round of (expensive) computation.
     values = {name: round(val, 6) for name, val, _ in metrics
-              if name in ELIMINATION_METRICS}
+              if name in ELIMINATION_METRIC_UNION}
     return jsonify(values=values)
 
 

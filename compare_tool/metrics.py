@@ -415,13 +415,45 @@ _RO_METRICS = {dcts, ndctbe, hf_energy_ratio, spectral_flatness}
 # Metrics proven best for eliminating the worst candidates (safe elimination
 # rate >= 94% at 25% cut, from 62-tournament analysis). Used for pre-filter
 # scoring. Weights reflect elimination reliability.
-ELIMINATION_METRICS = {
-    'Tenengrad': 1.0,       # 96% safe, rep for Edge Sharpness cluster
-    'HF Energy': 1.0,       # 96% safe, rep for Spectral HF cluster
-    'Local Std': 1.0,       # 96% safe, rep for Local Detail cluster
-    'Wavelet E.R.': 1.0,    # 94% safe, standalone
-    'Spec. Struct.': -1.0,  # 100% safe but INVERTED (lower = better)
+# Metric sets used to RANK candidates on the pre-filter (elimination) screen.
+# Values are consensus weights; the score is a weighted mean of per-metric
+# z-scores across the candidates being ranked.
+#
+# Safe-elimination rates below are from the 2026-08-21 report over 146
+# finetuning tournaments (cut50 / cut75 = share of tournaments where discarding
+# the bottom 50% / 75% by that metric still keeps all three human-picked epochs).
+ELIMINATION_SETS = {
+    # Default. One metric per redundancy cluster — the best performer in each —
+    # so the votes stay independent. Metrics inside a cluster correlate at
+    # |r| > 0.95, so stacking several of them just votes one signal repeatedly.
+    'best': {
+        'Tenengrad': 1.0,     # 62% / 27% — best overall; Edge Sharpness cluster
+        'LoG Response': 1.0,  # 55% / 23% — Local Detail cluster
+        'Wavelet E.R.': 1.0,  # 54% / 23% — standalone
+        'HF Energy': 1.0,     # 52% / 22% — Spectral HF cluster
+    },
+    # The original hand-picked set, kept selectable for comparison. Two of its
+    # five members (HF Energy, Spec. Struct.) are the same cluster, and its
+    # rates were measured on 62 tournaments — the numbers in the old comments
+    # ("96% safe") do not reproduce on the current, much larger dataset.
+    'classic': {
+        'Tenengrad': 1.0,
+        'HF Energy': 1.0,
+        'Local Std': 1.0,      # 54% / 22%
+        'Wavelet E.R.': 1.0,
+        'Spec. Struct.': -1.0,  # 50% / 20%, used INVERTED (lower = better)
+    },
 }
+
+DEFAULT_ELIMINATION_SET = 'best'
+
+# Back-compat: server-side consensus and the cross-view worker use the default.
+ELIMINATION_METRICS = ELIMINATION_SETS[DEFAULT_ELIMINATION_SET]
+
+# Every metric any set needs. The pre-filter returns values for all of these so
+# the UI can switch sets and re-rank instantly, with no recomputation.
+ELIMINATION_METRIC_UNION = sorted(
+    {name for s in ELIMINATION_SETS.values() for name in s})
 
 # Redundancy clusters: metrics with Pearson |r| > 0.95 across 62 tournaments.
 # Within each group, one representative is shown by default; the rest are

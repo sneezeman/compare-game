@@ -1068,3 +1068,18 @@ kbd.kbd {
 }
 
 .signed-in strong { color: #4ecdc4; }
+
+/* Pre-filter: which metric set ranks the candidates */
+.pf-elim-select {
+    padding: 3px 8px;
+    background: #16213e;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #eee;
+    font-size: 0.95em;
+}
+
+.pf-elim-hint {
+    color: #666;
+    font-size: 0.8em;
+}

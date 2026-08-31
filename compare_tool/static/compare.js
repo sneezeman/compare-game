@@ -820,6 +820,86 @@ let pfIdxRight = 0;  // index into full list (right viewer)
 let pfImgSize = 500;
 let pfSortMode = 'full';  // 'roi' or 'full' (full = whole image, more consistent)
 let pfHasRoi = false;
+// Metric sets used to rank candidates on this screen, and the raw per-candidate
+// values. Values are kept so switching the set re-ranks instantly — the server
+// returns every metric any set needs, so no recomputation is required.
+let pfElimSets = {};
+let pfElimSetName = '';
+let pfCandidatesRaw = null;
+let pfMetricsRoi = null;
+let pfMetricsFull = null;
+const ELIM_SET_KEY = 'compareGame.elimSet';
+
+function savedElimSet(fallback) {
+    try {
+        const v = localStorage.getItem(ELIM_SET_KEY);
+        if (v && pfElimSets[v]) return v;
+    } catch (e) { /* storage disabled */ }
+    return (fallback && pfElimSets[fallback]) ? fallback
+                                              : Object.keys(pfElimSets)[0] || '';
+}
+
+// Rank candidates by the weighted mean of per-metric z-scores for the active
+// set. Exclusions survive a re-rank so switching sets never loses your marks.
+function applyElimRanking() {
+    if (!pfCandidatesRaw) return;
+    const weights = pfElimSets[pfElimSetName] || {};
+    const names = Object.keys(weights);
+    const consensus = (valuesArr) => {
+        const scores = new Array(pfCandidatesRaw.length).fill(0);
+        if (!names.length) return scores;
+        names.forEach(name => {
+            const weight = weights[name];
+            const vals = valuesArr.map(v => (v || {})[name] || 0);
+            const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+            const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
+            const std = Math.sqrt(variance);
+            vals.forEach((v, i) => {
+                scores[i] += (std > 1e-10 ? (v - mean) / std : 0) * weight;
+            });
+        });
+        return scores.map(s => s / names.length);
+    };
+    const scoresRoi = consensus(pfMetricsRoi);
+    const scoresFull = pfHasRoi ? consensus(pfMetricsFull) : scoresRoi.slice();
+    const wasExcluded = new Set((prefilterCandidates || [])
+        .filter(c => c._excluded).map(c => `${c.exp_id}|${c.epoch}`));
+    prefilterCandidates = pfCandidatesRaw.map((c, i) => ({
+        ...c,
+        score: scoresRoi[i],
+        score_full: scoresFull[i],
+        _excluded: wasExcluded.has(`${c.exp_id}|${c.epoch}`),
+    }));
+    const key = pfSortMode === 'roi' ? 'score' : 'score_full';
+    prefilterCandidates.sort((a, b) => b[key] - a[key]);
+    pfIdxLeft = 0;
+    pfIdxRight = prefilterCandidates.length - 1;
+    renderPrefilterViewer();
+}
+
+function onElimSetChange() {
+    const sel = document.getElementById('pf-elim-set');
+    if (!sel) return;
+    pfElimSetName = sel.value;
+    try { localStorage.setItem(ELIM_SET_KEY, pfElimSetName); } catch (e) { /* ignore */ }
+    applyElimRanking();
+}
+
+// Fill the selector with whatever sets the server offers.
+function renderElimSetSelector() {
+    const sel = document.getElementById('pf-elim-set');
+    if (!sel) return;
+    const labels = { best: 'Best eliminators', classic: 'Classic' };
+    sel.innerHTML = Object.keys(pfElimSets).map(k => {
+        const n = Object.keys(pfElimSets[k]).length;
+        const label = labels[k] || k;
+        return `<option value="${escapeHtml(k)}">${escapeHtml(label)} (${n})</option>`;
+    }).join('');
+    sel.value = pfElimSetName;
+    const hint = document.getElementById('pf-elim-hint');
+    if (hint) hint.textContent = Object.keys(pfElimSets[pfElimSetName] || {}).join(', ');
+    sel.parentElement.style.display = Object.keys(pfElimSets).length > 1 ? '' : 'none';
+}
 
 async function showPrefilter() {
     showPhase('prefilter');
@@ -854,8 +934,10 @@ async function showPrefilter() {
 
         const candidates = listData.candidates;
         pfHasRoi = !!listData.has_roi;
-        const elimMetrics = listData.elimination_metrics;  // { name: weight }
-        const elimNames = Object.keys(elimMetrics);
+        // Ranking metric sets offered by the server; remembered choice wins.
+        pfElimSets = listData.elimination_sets
+            || { default: listData.elimination_metrics || {} };
+        pfElimSetName = savedElimSet(listData.default_elimination_set);
         const total = candidates.length * (pfHasRoi ? 2 : 1);
 
         // Phase 2: fetch metrics per candidate (with ROI + full) in parallel,
@@ -907,44 +989,22 @@ async function showPrefilter() {
         });
         await Promise.all(promises);
 
-        // Phase 3: compute z-score consensus client-side
-        const consensus = (valuesArr) => {
-            const scores = new Array(candidates.length).fill(0);
-            elimNames.forEach(name => {
-                const weight = elimMetrics[name];
-                const vals = valuesArr.map(v => (v || {})[name] || 0);
-                const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
-                const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
-                const std = Math.sqrt(variance);
-                vals.forEach((v, i) => {
-                    const z = std > 1e-10 ? (v - mean) / std : 0;
-                    scores[i] += z * weight;
-                });
-            });
-            return scores.map(s => s / elimNames.length);
-        };
-
-        const scoresRoi = consensus(metricsRoi);
-        const scoresFull = pfHasRoi ? consensus(metricsFull) : scoresRoi.slice();
-
-        prefilterCandidates = candidates.map((c, i) => ({
-            ...c,
-            score: scoresRoi[i],
-            score_full: scoresFull[i],
-            _excluded: false,
-        }));
-        // Default: sort by full-image score (more consistent than ROI-only)
-        prefilterCandidates.sort((a, b) => b.score_full - a.score_full);
+        // Phase 3: rank by z-score consensus (client-side, see applyElimRanking).
+        // Keeping the raw values lets a metric-set switch re-rank with no refetch.
+        pfCandidatesRaw = candidates;
+        pfMetricsRoi = metricsRoi;
+        pfMetricsFull = metricsFull;
+        prefilterCandidates = [];
 
         // Hide the ROI/full toggle if no ROI is set
         const sortRow = document.getElementById('pf-sort-row');
         if (sortRow) sortRow.style.display = pfHasRoi ? '' : 'none';
 
         progress.style.display = 'none';
+        // Default: full-image score (more consistent than ROI-only).
         pfSortMode = 'full';
-        pfIdxLeft = 0;
-        pfIdxRight = prefilterCandidates.length - 1;
-        renderPrefilterViewer();
+        renderElimSetSelector();
+        applyElimRanking();
 
         if (pfTimeouts > 0) {
             const sortRow = document.getElementById('pf-sort-row');
