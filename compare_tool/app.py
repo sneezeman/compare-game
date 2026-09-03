@@ -23,7 +23,7 @@ from PIL import Image
 
 import metrics_store
 from eval_export import (build_csv, build_sh, collect_eval_rows,
-                         command_for_winner)
+                         command_for_ranking, is_raw_label)
 from precompute import (build_worklist, is_idle, scan_is_settled,
                         sibling_filenames)
 from gif_loader import (compute_label_exclusion, compute_variability_map,
@@ -288,6 +288,23 @@ def generate_epoch_labels(num_epochs, start=None, end=None, step=None, raw_first
 # ---------------------------------------------------------------------------
 # Cached metrics
 # ---------------------------------------------------------------------------
+
+def _eval_command_payload(ranking):
+    """Eval command for a finished tournament, plus why it may not be the winner.
+
+    Walks the ranking rather than taking only the top entry: a RAW frame (the
+    un-denoised input) can win, and it has no epoch or checkpoint to evaluate.
+    In that case we surface the best actual epoch and say what happened, instead
+    of rendering nothing and leaving the user guessing.
+    """
+    labels = [c.get('full_label') for c in (ranking or [])]
+    cmd, skipped = command_for_ranking(labels)
+    return {
+        'eval_command': cmd,
+        'eval_skipped': skipped,
+        'eval_winner_is_raw': bool(labels) and is_raw_label(labels[0]),
+    }
+
 
 def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
     """Get metrics with caching.
@@ -1220,8 +1237,7 @@ def tournament_choice(session_id):
         result['top3'] = top3
         # Copy-pastable eval command for the winner (None for training tiles,
         # which have no checkpoint to evaluate against).
-        result['eval_command'] = command_for_winner(
-            ranking[0].get('full_label') if ranking else None)
+        result.update(_eval_command_payload(ranking))
         result['confidence'] = confidence
         result['all_metrics'] = [
             [{'name': n, 'value': round(v, 6), 'higher_is_better': h} for n, v, h in m]
@@ -1300,8 +1316,7 @@ def tournament_finish(session_id):
         'ranking': ranking,
         'top3': top3,
         # Copy-pastable eval command for the winner (see tournament_choice).
-        'eval_command': command_for_winner(
-            ranking[0].get('full_label') if ranking else None),
+        **_eval_command_payload(ranking),
         'confidence': confidence,
         'all_metrics': [
             [{'name': n, 'value': round(v, 6), 'higher_is_better': h} for n, v, h in m]

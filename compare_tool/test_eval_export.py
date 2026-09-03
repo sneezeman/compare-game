@@ -1,7 +1,7 @@
 """Unit tests for the eval-export helpers (pure, no Flask)."""
 
 from eval_export import (collect_eval_rows, build_csv, build_sh,
-                         command_for_winner)
+                         command_for_winner, command_for_ranking)
 
 # A finetune winner GIF: target T001 finetuned from T000 starting at epoch 140.
 FT = ('ls3639/NM0029/finetune/'
@@ -176,3 +176,34 @@ def test_empty_sh_has_no_jobs():
     sh = build_sh([])
     assert sh.startswith('#!/bin/bash')
     assert 'sbatch' not in sh
+
+
+# --- RAW winners -----------------------------------------------------------
+# When a GIF has raw_first, its first frame is labelled "RAW" instead of
+# "Ep.<N>". A RAW frame is the un-denoised input: there is no epoch and no
+# checkpoint, so no eval command exists for it.
+
+def test_raw_winner_has_no_command():
+    assert command_for_winner(f'{FT} RAW') is None
+
+
+def test_ranking_falls_back_past_raw_to_first_real_epoch():
+    ranking = [f'{FT} RAW', f'{FT2} RAW', f'{FT} Ep.83']
+    cmd, skipped = command_for_ranking(ranking, metadata_dir='/m')
+    assert skipped == 2
+    assert cmd == ('./submit_eval.sh "/m/NM0029_HT_100nm_T001_0001_rec_.json" "83" '
+                   '"NM0029_HT_100nm_T000_0001_rec_" "140"')
+
+
+def test_ranking_uses_winner_when_it_is_a_real_epoch():
+    cmd, skipped = command_for_ranking([f'{FT} Ep.142', f'{FT} Ep.99'], metadata_dir='/m')
+    assert skipped == 0
+    assert '"142"' in cmd
+
+
+def test_ranking_all_raw_yields_nothing():
+    assert command_for_ranking([f'{FT} RAW', f'{FT2} RAW'], metadata_dir='/m') == (None, 2)
+
+
+def test_ranking_empty():
+    assert command_for_ranking([], metadata_dir='/m') == (None, 0)

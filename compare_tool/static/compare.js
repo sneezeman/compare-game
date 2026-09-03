@@ -1369,7 +1369,8 @@ async function startTournament() {
 
         // Handle immediate completion (e.g., 1 candidate after RAW exclusion)
         if (data.done) {
-            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command);
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command,
+                        { skipped: data.eval_skipped, winnerIsRaw: data.eval_winner_is_raw });
             return;
         }
 
@@ -1639,7 +1640,8 @@ async function submitChoice(winner) {
         }
 
         if (data.done) {
-            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command);
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command,
+                        { skipped: data.eval_skipped, winnerIsRaw: data.eval_winner_is_raw });
             return;
         }
 
@@ -1664,7 +1666,8 @@ async function finishEarly() {
         if (!resp.ok) { alert('Server error: ' + resp.status); return; }
         const data = await resp.json();
         if (data.done) {
-            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command);
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command,
+                        { skipped: data.eval_skipped, winnerIsRaw: data.eval_winner_is_raw });
         }
     } catch (e) {
         alert('Network error: ' + e.message);
@@ -1802,14 +1805,47 @@ function onEvalMetadataDirInput() {
 
 // Show the winner's copy-pastable eval command. Hidden when the server sent
 // none — e.g. a path that isn't a recognizable experiment directory.
-function renderEvalCommand(cmd) {
+function renderEvalCommand(cmd, info) {
     const box = document.getElementById('eval-command-box');
     const el = document.getElementById('eval-command-text');
+    const note = document.getElementById('eval-command-note');
     if (!box || !el) return;
+    info = info || {};
+
+    // Say why, instead of rendering nothing. A RAW frame (the un-denoised
+    // input) can win the tournament; it has no epoch or checkpoint, so there is
+    // no command for it and we fall through to the best actual epoch.
+    if (note) {
+        let msg = '';
+        if (info.winnerIsRaw && cmd) {
+            msg = `⚠ The RAW (un-denoised) frame ranked 1st — no denoised epoch beat it, `
+                + `and RAW has no epoch or checkpoint to evaluate. The command below is `
+                + `for the best actual epoch instead.`;
+        } else if (info.winnerIsRaw && !cmd) {
+            msg = `⚠ The RAW (un-denoised) frame ranked 1st and no ranked candidate has an `
+                + `epoch to evaluate, so there is no eval command for this tournament.`;
+        } else if (!cmd && info.skipped) {
+            msg = `No eval command: none of the ${info.skipped} ranked candidates is a `
+                + `recognisable experiment with an epoch.`;
+        } else if (cmd && info.skipped) {
+            msg = `⚠ Skipped ${info.skipped} higher-ranked candidate(s) with no epoch to `
+                + `evaluate; the command below is for the best actual epoch.`;
+        }
+        note.textContent = msg;
+        note.style.display = msg ? '' : 'none';
+    }
+
     if (!cmd) {
-        box.style.display = 'none';
+        // Keep the box visible when we have something to explain.
+        box.style.display = (note && note.textContent) ? '' : 'none';
+        el.style.display = 'none';
+        const btn = document.getElementById('eval-copy-btn');
+        if (btn) btn.style.display = 'none';
         return;
     }
+    el.style.display = '';
+    const btn = document.getElementById('eval-copy-btn');
+    if (btn) btn.style.display = '';
     evalCommandTemplate = cmd;
     const input = document.getElementById('eval-metadata-dir');
     if (input) input.value = savedEvalMetadataDir();
@@ -1858,7 +1894,7 @@ async function copyEvalCommand() {
     }
 }
 
-async function showResults(ranking, top3, serverMetrics, savePath, confidence, evalCommand) {
+async function showResults(ranking, top3, serverMetrics, savePath, confidence, evalCommand, evalInfo) {
     showPhase('results');
     document.removeEventListener('keydown', handleTournamentKey);
 
@@ -1872,7 +1908,10 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence, e
         podium.appendChild(div);
     }
 
-    renderEvalCommand(evalCommand);
+    renderEvalCommand(evalCommand, {
+        skipped: evalInfo && evalInfo.skipped,
+        winnerIsRaw: evalInfo && evalInfo.winnerIsRaw,
+    });
 
     // Top-3 ROI viewer for one last visual sanity check
     showTop3Viewer(top3);

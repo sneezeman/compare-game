@@ -168,6 +168,36 @@ def command_for_winner(full_label, metadata_dir=None):
     return None
 
 
+# A raw_first GIF labels its first frame "RAW" instead of "Ep.<N>".
+_RAW_RE = re.compile(r'\sRAW\s*$')
+
+
+def is_raw_label(full_label):
+    """True when this candidate is the un-denoised RAW frame."""
+    return bool(full_label) and bool(_RAW_RE.search(full_label))
+
+
+def command_for_ranking(labels, metadata_dir=None):
+    """First runnable command in a ranked candidate list, and how many entries
+    were passed over to reach it.
+
+    A RAW frame is the un-denoised input: it has no epoch and no checkpoint, so
+    no eval command exists for it. When RAW wins the tournament — which means no
+    denoised epoch beat the raw image — the useful thing is still the best
+    *actual* epoch, so fall through to it and report the skip count so the UI can
+    explain what happened rather than silently showing nothing.
+
+    Returns (command_or_None, n_skipped).
+    """
+    skipped = 0
+    for label in labels or []:
+        cmd = command_for_winner(label, metadata_dir)
+        if cmd:
+            return cmd, skipped
+        skipped += 1
+    return None, skipped
+
+
 def build_sh(rows):
     """Batch script of `submit_eval.sh` calls — the same front-end the results
     screen emits, so there is only one submission script to maintain.

@@ -1083,3 +1083,10 @@ kbd.kbd {
     color: #666;
     font-size: 0.8em;
 }
+
+.eval-cmd-warn {
+    margin: 0 0 8px;
+    color: #e9a23b;
+    font-size: 0.85em;
+    line-height: 1.45;
+}
