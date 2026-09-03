@@ -179,20 +179,38 @@ def test_empty_sh_has_no_jobs():
 
 
 # --- RAW winners -----------------------------------------------------------
-# When a GIF has raw_first, its first frame is labelled "RAW" instead of
-# "Ep.<N>". A RAW frame is the un-denoised input: there is no epoch and no
-# checkpoint, so no eval command exists for it.
+# A raw_first GIF labels its first frame "RAW" instead of "Ep.<N>". RAW winning
+# means no denoised epoch beat the un-denoised input. For a finetune experiment
+# the meaningful thing to evaluate is then the STARTING checkpoint, i.e.
+# epoch == finetune_epoch, which routes submit_eval.sh to its
+# `results/checkpoints/<ckpt>/weights_epoch_<fe>.torch` branch.
 
-def test_raw_winner_has_no_command():
-    assert command_for_winner(f'{FT} RAW') is None
+def test_raw_winner_finetune_uses_checkpoint_epoch():
+    cmd = command_for_winner(f'{FT} RAW', metadata_dir='/m')
+    assert cmd == ('./submit_eval.sh "/m/NM0029_HT_100nm_T001_0001_rec_.json" "140" '
+                   '"NM0029_HT_100nm_T000_0001_rec_" "140"')
+    # epoch must equal finetune_epoch -> evaluates the pre-finetuning checkpoint
+    assert cmd.endswith('"140" "NM0029_HT_100nm_T000_0001_rec_" "140"')
 
 
-def test_ranking_falls_back_past_raw_to_first_real_epoch():
+def test_raw_winner_training_run_has_no_command():
+    # No checkpoint and no epoch: nothing meaningful to evaluate.
+    assert command_for_winner(f'{TR} RAW', metadata_dir='/m') is None
+
+
+def test_ranking_raw_finetune_needs_no_fallback():
     ranking = [f'{FT} RAW', f'{FT2} RAW', f'{FT} Ep.83']
     cmd, skipped = command_for_ranking(ranking, metadata_dir='/m')
-    assert skipped == 2
-    assert cmd == ('./submit_eval.sh "/m/NM0029_HT_100nm_T001_0001_rec_.json" "83" '
-                   '"NM0029_HT_100nm_T000_0001_rec_" "140"')
+    assert skipped == 0                      # the RAW winner itself is usable now
+    assert '"140" "NM0029_HT_100nm_T000_0001_rec_" "140"' in cmd
+
+
+def test_ranking_falls_through_only_when_unusable():
+    # Training-run RAW yields nothing, so the next ranked entry is used.
+    ranking = [f'{TR} RAW', f'{FT} Ep.83']
+    cmd, skipped = command_for_ranking(ranking, metadata_dir='/m')
+    assert skipped == 1
+    assert '"83"' in cmd
 
 
 def test_ranking_uses_winner_when_it_is_a_real_epoch():
@@ -201,8 +219,8 @@ def test_ranking_uses_winner_when_it_is_a_real_epoch():
     assert '"142"' in cmd
 
 
-def test_ranking_all_raw_yields_nothing():
-    assert command_for_ranking([f'{FT} RAW', f'{FT2} RAW'], metadata_dir='/m') == (None, 2)
+def test_ranking_all_unusable_yields_nothing():
+    assert command_for_ranking([f'{TR} RAW'], metadata_dir='/m') == (None, 1)
 
 
 def test_ranking_empty():

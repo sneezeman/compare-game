@@ -26,6 +26,8 @@ EvalRow = namedtuple('EvalRow', [
 
 # "<gif_path> Ep.142" — the winner is the first entry of the Top 3 line.
 _WINNER_RE = re.compile(r'^(?P<gif>.+?)\s+Ep\.(?P<ep>\d+)\s*$')
+# Same, but for the RAW frame of a raw_first GIF (no epoch number).
+_RAW_WINNER_RE = re.compile(r'^(?P<gif>.+?)\s+RAW\s*$')
 # Finetune dir: <meta>_rec_ _from_ <ckpt>_rec_ _ <finetune_epoch>
 _FT_DIR_RE = re.compile(r'^(?P<meta>.+?_rec_)_from_(?P<ckpt>.+?_rec_)_(?P<fe>\d+)$')
 # Short tile token (e.g. T01, T002) as an underscore-delimited segment. The tile
@@ -40,14 +42,21 @@ _TRAIN_DIR_RE = re.compile(r'^(?!.*_from_).+_rec_?$')
 
 
 def _parse_winner(top3):
-    """Return (gif_path, epoch) for the winner, or None if unparseable."""
+    """Return (gif_path, epoch) for the winner, or None if unparseable.
+
+    epoch is None when the candidate is the RAW frame — a raw_first GIF labels
+    its first frame "RAW" rather than "Ep.<N>".
+    """
     if not top3:
         return None
     first = top3.split(',')[0].strip()
     m = _WINNER_RE.match(first)
-    if not m:
-        return None
-    return m.group('gif').strip(), int(m.group('ep'))
+    if m:
+        return m.group('gif').strip(), int(m.group('ep'))
+    m = _RAW_WINNER_RE.match(first)
+    if m:
+        return m.group('gif').strip(), None
+    return None
 
 
 def _short_tile(full_metadata):
@@ -69,6 +78,8 @@ def collect_eval_rows(results, selected_filenames=None):
         if not parsed:
             continue
         gif_path, epoch = parsed
+        if epoch is None:
+            continue  # RAW winner: no epoch to tabulate for the batch export
         if selected_filenames is not None and gif_path not in selected_filenames:
             continue
         dirname = os.path.basename(os.path.dirname(gif_path))
@@ -160,9 +171,15 @@ def command_for_winner(full_label, metadata_dir=None):
     ft = _FT_DIR_RE.match(dirname)
     if ft:
         meta, ckpt, fe = ft.group('meta'), ft.group('ckpt'), int(ft.group('fe'))
-        return (f'{_SUBMIT} "{base}/{meta}.json" "{epoch}" '
+        # RAW won: no finetuned epoch beat the un-denoised input, so evaluate the
+        # state finetuning STARTED from. epoch == finetune_epoch routes
+        # submit_eval.sh to results/checkpoints/<ckpt>/weights_epoch_<fe>.torch.
+        ep = fe if epoch is None else epoch
+        return (f'{_SUBMIT} "{base}/{meta}.json" "{ep}" '
                 f'"{ckpt}" "{fe}"')
     if _TRAIN_DIR_RE.match(dirname):
+        if epoch is None:
+            return None  # RAW on a training run: no checkpoint, no epoch
         # The whole dir name is the metadata; two args means "no transfer".
         return f'{_SUBMIT} "{base}/{dirname}.json" "{epoch}"'
     return None

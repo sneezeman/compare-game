@@ -1818,9 +1818,9 @@ function renderEvalCommand(cmd, info) {
     if (note) {
         let msg = '';
         if (info.winnerIsRaw && cmd) {
-            msg = `⚠ The RAW (un-denoised) frame ranked 1st — no denoised epoch beat it, `
-                + `and RAW has no epoch or checkpoint to evaluate. The command below is `
-                + `for the best actual epoch instead.`;
+            msg = `⚠ The RAW (un-denoised) frame ranked 1st — no denoised epoch beat it. `
+                + `The command below therefore evaluates the checkpoint finetuning `
+                + `started from (epoch = finetune epoch), not a finetuned epoch.`;
         } else if (info.winnerIsRaw && !cmd) {
             msg = `⚠ The RAW (un-denoised) frame ranked 1st and no ranked candidate has an `
                 + `epoch to evaluate, so there is no eval command for this tournament.`;
