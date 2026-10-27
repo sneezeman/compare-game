@@ -30,8 +30,10 @@ from gif_loader import (compute_label_exclusion, compute_variability_map,
                         detect_label_present, extract_frames, suggest_rois,
                         variability_to_heatmap_rgba)
 from metrics import (compute_all, compute_metric_zscores, METRIC_GROUPS,
-                     ELIMINATION_METRICS, ELIMINATION_SETS,
+                     METRICS, ELIMINATION_METRICS, ELIMINATION_SETS,
                      ELIMINATION_METRIC_UNION, DEFAULT_ELIMINATION_SET)
+from rescan import diff_scan, file_mtime, snapshot
+from results_view import parse_result_tsv, split_full_label
 from tournament import Tournament
 
 app = Flask(__name__)
@@ -43,32 +45,69 @@ _state_lock = threading.RLock()  # reentrant — cleanup is called from locked c
 _user_config = {}
 
 
+def _read_users_file(config_path):
+    """Parse users.json into {username: {password, dirs}}.
+
+    Raises ValueError on a wrong shape. A string `dirs` would otherwise be
+    matched character by character and widen access.
+    """
+    with open(config_path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError('top level must be an object')
+    users = {}
+    for username, cfg in data.items():
+        if not isinstance(cfg, dict) or not isinstance(cfg.get('password'), str):
+            raise ValueError(f'user {username!r}: password must be a string')
+        dirs = cfg.get('dirs', ['*'])
+        if not isinstance(dirs, list) or not all(isinstance(d, str) for d in dirs):
+            raise ValueError(f'user {username!r}: dirs must be a list of strings')
+        users[username] = {'password': cfg['password'], 'dirs': dirs}
+    return users
+
+
 def load_users_config(config_path=None):
     """Load user config from JSON file or COMPARE_USERS env var."""
     global _user_config
-    _user_config = {}
 
     # Check env var for config path if not provided
     if not config_path:
         config_path = os.environ.get('COMPARE_USERS_CONFIG')
 
     if config_path and os.path.isfile(config_path):
-        with open(config_path) as f:
-            data = json.load(f)
-        for username, cfg in data.items():
-            _user_config[username] = {
-                'password': cfg['password'],
-                'dirs': cfg.get('dirs', ['*']),
-            }
+        _user_config = _read_users_file(config_path)
         print(f'  Loaded {len(_user_config)} user(s) from {config_path}')
         return
 
     # Fallback: COMPARE_USERS env var (all users get full access)
+    users = {}
     for pair in os.environ.get('COMPARE_USERS', '').split(','):
         pair = pair.strip()
         if ':' in pair:
             u, p = pair.split(':', 1)
-            _user_config[u] = {'password': p, 'dirs': ['*']}
+            users[u] = {'password': p, 'dirs': ['*']}
+    _user_config = users
+
+
+def reload_users_config(config_path):
+    """Swap in an edited users.json while the app runs.
+
+    Keeps the current config when the file is missing, invalid or empty,
+    because an empty config switches authentication off.
+    """
+    global _user_config
+    try:
+        users = _read_users_file(config_path)
+    except (OSError, ValueError, KeyError, AttributeError, TypeError) as e:
+        print(f'  [rescan] users.json NOT reloaded ({e}); keeping {len(_user_config)} user(s)',
+              flush=True)
+        return False
+    if not users:
+        print('  [rescan] users.json is empty; keeping the current users', flush=True)
+        return False
+    _user_config = users  # one assignment, so no request sees a half-built config
+    print(f'  [rescan] users.json reloaded: {len(users)} user(s)', flush=True)
+    return True
 
 
 def _user_can_access(username, filename):
@@ -347,9 +386,13 @@ def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
         _metrics_cache[key] = results
     # Write-through to the persistent store for whole-frame default-r_o results,
     # so the worker (and future restarts) find them already warm.
+    # Skip it when a rescan dropped this entry meanwhile (the GIF was replaced),
+    # so old pixels' metrics never land under the filename again.
     if whole_frame and exp.get('filename'):
         try:
-            metrics_store.put(_metrics_db, exp['filename'], epoch, r_o, results)
+            with _state_lock:
+                if experiments.get(exp_id) is exp:
+                    metrics_store.put(_metrics_db, exp['filename'], epoch, r_o, results)
         except Exception as e:
             print(f'  metrics_store put failed for {exp["filename"]} ep{epoch}: {e}')
     return results
@@ -361,8 +404,10 @@ def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
 
 @app.route('/health')
 def health():
-    return jsonify(status='ok', experiments=len(experiments),
-                   loaded=sum(1 for e in experiments.values() if 'frames' in e))
+    with _state_lock:
+        loaded = sum(1 for e in experiments.values() if 'frames' in e)
+        total = len(experiments)
+    return jsonify(status='ok', experiments=total, loaded=loaded)
 
 
 @app.template_global('asset_version')
@@ -390,7 +435,9 @@ def list_experiments():
     """List all loaded experiments with completion status, filtered by user access."""
     username = getattr(g, 'username', None)
     result = []
-    for exp_id, exp in experiments.items():
+    with _state_lock:
+        snapshot_items = list(experiments.items())
+    for exp_id, exp in snapshot_items:
         if username and not _user_can_access(username, exp['filename']):
             continue
         result.append({
@@ -421,24 +468,85 @@ def list_past_results():
     return jsonify(results=filtered)
 
 
+def _resolve_past_result(filename):
+    """Path of a saved result TSV, or (None, error response) if not allowed."""
+    root = os.path.normpath(results_dir)
+    path = os.path.normpath(os.path.join(root, filename))
+    if not path.startswith(root + os.sep):
+        return None, (jsonify(error='Invalid path'), 400)
+    if not os.path.isfile(path):
+        return None, (jsonify(error='Result not found'), 404)
+    # Match on the canonical path, so 'a/./b.tsv' cannot dodge the check.
+    # A file missing from past_results is visible to full-access users only.
+    username = getattr(g, 'username', None)
+    if username:
+        rel = os.path.relpath(path, root)
+        matching = [r for r in past_results if r['filename'] == rel]
+        gifs = matching[0].get('gifs', []) if matching else []
+        full = '*' in _user_config.get(username, {}).get('dirs', [])
+        if not full and not any(_user_can_access(username, gif) for gif in gifs):
+            return None, (jsonify(error='Access denied'), 403)
+    return path, None
+
+
 @app.route('/api/past-results/<path:filename>')
 def get_past_result(filename):
     """Download a past result TSV file (access-checked)."""
-    path = os.path.normpath(os.path.join(results_dir, filename))
-    if not path.startswith(os.path.normpath(results_dir) + os.sep):
-        return jsonify(error='Invalid path'), 400
-    if not os.path.isfile(path):
-        return jsonify(error='Result not found'), 404
-    # Check if user can access any GIF in this result
-    username = getattr(g, 'username', None)
-    if username:
-        matching = [r for r in past_results if r['filename'] == filename]
-        if matching:
-            gifs = matching[0].get('gifs', [])
-            if not any(_user_can_access(username, gif) for gif in gifs):
-                return jsonify(error='Access denied'), 403
+    path, err = _resolve_past_result(filename)
+    if err:
+        return err
     return send_file(path, mimetype='text/tab-separated-values',
                      as_attachment=True, download_name=os.path.basename(filename))
+
+
+@app.route('/api/past-results/view/<path:filename>')
+def view_past_result(filename):
+    """A saved result in the shape the results screen renders.
+
+    Candidates whose GIF is still loaded get an exp_id and frame index, so
+    the top-3 viewer can show them; the rest carry labels and metrics only.
+    """
+    path, err = _resolve_past_result(filename)
+    if err:
+        return err
+    with open(path, encoding='utf-8', errors='replace') as f:
+        saved = parse_result_tsv(f.read())
+
+    username = getattr(g, 'username', None)
+    with _state_lock:
+        loaded = {e['filename']: (eid, list(e.get('epoch_labels', [])))
+                  for eid, e in experiments.items()}
+
+    ranking = []
+    for row in saved['ranking']:
+        gif, epoch_label = split_full_label(row['full_label'])
+        cand = {'label': f'{_format_exp_label(gif)} {epoch_label}',
+                'full_label': row['full_label'], 'exp_id': None, 'epoch': None}
+        hit = loaded.get(gif)
+        if (hit and epoch_label in hit[1]
+                and (not username or _user_can_access(username, gif))):
+            cand['exp_id'], cand['epoch'] = hit[0], hit[1].index(epoch_label)
+        ranking.append(cand)
+
+    names = saved['metric_names']
+    higher = {name: hib for name, _, hib in METRICS}
+    if all(len(row['values']) == len(names) for row in saved['ranking']):
+        all_metrics = [[{'name': n, 'value': v, 'higher_is_better': higher.get(n, True)}
+                        for n, v in zip(names, row['values'])]
+                       for row in saved['ranking']]
+    else:
+        all_metrics = [[] for _ in saved['ranking']]
+
+    return jsonify(
+        ranking=ranking,
+        top3=ranking[:3],
+        all_metrics=all_metrics,
+        **_eval_command_payload(ranking),
+        roi=saved['roi'],
+        date=saved['date'],
+        user=saved['user'],
+        filename=os.path.relpath(path, os.path.normpath(results_dir)),
+    )
 
 
 def _accessible_results():
@@ -611,7 +719,9 @@ def get_epoch_config():
     """Return epoch config for experiments accessible to current user."""
     username = getattr(g, 'username', None)
     result = {}
-    for exp_id, exp in experiments.items():
+    with _state_lock:
+        snapshot_items = list(experiments.items())
+    for exp_id, exp in snapshot_items:
         if username and not _user_can_access(username, exp['filename']):
             continue
         result[exp_id] = {
@@ -830,7 +940,9 @@ def _find_sibling_exp_id(exp_id, target_view):
     if not m or m.group(1) == target_view[-1]:
         return exp_id if m and m.group(1) == target_view[-1] else None
     sibling_name = re.sub(r'view[012]', target_view, name, count=1)
-    for other_id, other_exp in experiments.items():
+    with _state_lock:
+        snapshot_items = list(experiments.items())
+    for other_id, other_exp in snapshot_items:
         if other_exp['filename'] == sibling_name:
             return other_id
     return None
@@ -1077,16 +1189,20 @@ def start_tournament():
     # entirely pre-filtered out — so the result file still lists them as done.
     selected_exp_ids = [ec['exp_id'] for ec in exps_config]
 
-    tournaments[session_id] = {
-        'tournament': t,
-        'candidates': candidates,
-        'selected_exp_ids': selected_exp_ids,
-        'roi': roi,
-        'r_o': r_o,
-        'user_name': user_name,
-        'username': getattr(g, 'username', None),
-        'created_at': datetime.now().timestamp(),
-    }
+    with _state_lock:
+        # A rescan may have dropped a selected GIF while frames were loading.
+        if any(c['exp_id'] not in experiments for c in candidates):
+            return jsonify(error='A selected GIF changed on disk; reload the page'), 409
+        tournaments[session_id] = {
+            'tournament': t,
+            'candidates': candidates,
+            'selected_exp_ids': selected_exp_ids,
+            'roi': roi,
+            'r_o': r_o,
+            'user_name': user_name,
+            'username': getattr(g, 'username', None),
+            'created_at': datetime.now().timestamp(),
+        }
 
     pair = t.current_pair()
     progress = t.progress()
@@ -1610,77 +1726,222 @@ def scan_past_results():
     print(f'  Found {len(past_results)} past result(s)')
 
 
+def _probe_gif(gif_path, rel_path, cli_config=None):
+    """Read a GIF's metadata (no pixels) into an experiment entry.
+
+    Returns None for unreadable files and GIFs with fewer than two frames.
+    """
+    cli_config = cli_config or {}
+    try:
+        st = os.stat(gif_path)
+        img = Image.open(gif_path)
+        try:
+            w, h = img.size
+            n_frames = 0
+            try:
+                while True:
+                    n_frames += 1
+                    img.seek(img.tell() + 1)
+            except EOFError:
+                pass
+        finally:
+            img.close()
+        if n_frames < 2:
+            return None
+    except Exception:
+        return None
+
+    # Epoch config: CLI > filename > default
+    epoch_config = {'source': 'default'}
+    if cli_config.get('start') is not None:
+        epoch_config = {**cli_config, 'source': 'cli'}
+    else:
+        parsed = parse_epoch_config_from_name(rel_path)
+        if parsed:
+            epoch_config = {**parsed, 'source': 'filename'}
+
+    # Auto-detect raw_first: if the filename says start-end (N values)
+    # but the GIF has N+1 frames, the first frame is a RAW reference
+    if (not epoch_config.get('raw_first')
+            and epoch_config.get('start') is not None
+            and epoch_config.get('end') is not None):
+        expected = epoch_config['end'] - epoch_config['start'] + 1
+        step = epoch_config.get('step')
+        if step and step > 1:
+            expected = (epoch_config['end'] - epoch_config['start']) // step + 1
+        if n_frames == expected + 1:
+            epoch_config['raw_first'] = True
+            print(f'  Auto-detected raw_first for {rel_path} '
+                  f'({n_frames} frames, range {epoch_config["start"]}-{epoch_config["end"]})')
+
+    labels = generate_epoch_labels(
+        n_frames,
+        epoch_config.get('start'),
+        epoch_config.get('end'),
+        epoch_config.get('step'),
+        epoch_config.get('raw_first', False),
+    )
+    return {
+        'filename': rel_path,
+        'gif_path': gif_path,
+        'sig': (st.st_size, st.st_mtime),
+        'num_epochs': n_frames,
+        'height': h,
+        'width': w,
+        'epoch_config': epoch_config,
+        'epoch_labels': labels,
+    }
+
+
 def load_data_dir(data_dir, cli_config=None):
     """Scan a data directory for GIFs (lazy — only metadata, no pixel loading)."""
-
-
-    if cli_config is None:
-        cli_config = {}
-
-    gif_files = glob_mod.glob(os.path.join(data_dir, '**', '*.gif'), recursive=True)
-    for gif_path in gif_files:
-        exp_id = str(uuid.uuid4())[:8]
-        rel_path = os.path.relpath(gif_path, data_dir)
-        # Peek at the GIF to get frame count and dimensions without loading all frames
-        try:
-            img = Image.open(gif_path)
-            try:
-                w, h = img.size
-                n_frames = 0
-                try:
-                    while True:
-                        n_frames += 1
-                        img.seek(img.tell() + 1)
-                except EOFError:
-                    pass
-            finally:
-                img.close()
-            if n_frames < 2:
-                continue
-        except Exception:
+    for rel_path in sorted(snapshot(data_dir)):
+        entry = _probe_gif(os.path.join(data_dir, rel_path), rel_path, cli_config)
+        if entry is None:
             continue
+        experiments[str(uuid.uuid4())[:8]] = entry
+        print(f'  Found {rel_path} ({entry["num_epochs"]} epochs, '
+              f'{entry["width"]}x{entry["height"]})')
 
-        # Epoch config: CLI > filename > default
-        epoch_config = {'source': 'default'}
-        if cli_config.get('start') is not None:
-            epoch_config = {**cli_config, 'source': 'cli'}
-        else:
-            parsed = parse_epoch_config_from_name(rel_path)
-            if parsed:
-                epoch_config = {**parsed, 'source': 'filename'}
 
-        # Auto-detect raw_first: if the filename says start-end (N values)
-        # but the GIF has N+1 frames, the first frame is a RAW reference
-        if (not epoch_config.get('raw_first')
-                and epoch_config.get('start') is not None
-                and epoch_config.get('end') is not None):
-            expected = epoch_config['end'] - epoch_config['start'] + 1
-            step = epoch_config.get('step')
-            if step and step > 1:
-                expected = (epoch_config['end'] - epoch_config['start']) // step + 1
-            if n_frames == expected + 1:
-                epoch_config['raw_first'] = True
-                print(f'  Auto-detected raw_first for {rel_path} '
-                      f'({n_frames} frames, range {epoch_config["start"]}-{epoch_config["end"]})')
+def snapshot_sig(data_dir, rel_path):
+    """(size, mtime) of one GIF, or None when it has vanished."""
+    try:
+        st = os.stat(os.path.join(data_dir, rel_path))
+    except OSError:
+        return None
+    return (st.st_size, st.st_mtime)
 
-        labels = generate_epoch_labels(
-            n_frames,
-            epoch_config.get('start'),
-            epoch_config.get('end'),
-            epoch_config.get('step'),
-            epoch_config.get('raw_first', False),
-        )
 
-        experiments[exp_id] = {
-            'filename': rel_path,
-            'gif_path': gif_path,
-            'num_epochs': n_frames,
-            'height': h,
-            'width': w,
-            'epoch_config': epoch_config,
-            'epoch_labels': labels,
-        }
-        print(f'  Found {rel_path} ({n_frames} epochs, {w}x{h})')
+# Files that failed to probe: {rel_path: sig}. Retried only once they change.
+_unreadable_gifs = {}
+
+
+def _drop_experiment(exp_id):
+    """Forget an experiment and its in-memory caches. Caller holds _state_lock."""
+    experiments.pop(exp_id, None)
+    _access_times.pop(exp_id, None)
+    for k in [k for k in _metrics_cache if k[0] == exp_id]:
+        del _metrics_cache[k]
+
+
+def _busy_exp_ids():
+    """exp_ids used by unfinished tournaments. Caller holds _state_lock."""
+    busy = set()
+    for td in tournaments.values():
+        t = td.get('tournament')
+        if t is not None and t.is_done():
+            continue
+        busy.update(td.get('selected_exp_ids') or [])
+        busy.update(c['exp_id'] for c in td.get('candidates', []))
+    return busy
+
+
+def rescan_data_dir(data_dir):
+    """Apply GIFs added, replaced or deleted since the last scan.
+
+    Unchanged files keep their exp_id, so open pages and running tournaments
+    stay valid. A GIF that an unfinished tournament uses is left alone until
+    that tournament finishes. Returns a summary string, empty when nothing
+    changed, which also notes files still uploading or waiting on a tournament.
+    """
+    with _state_lock:
+        by_name = {e['filename']: eid for eid, e in experiments.items()}
+        known = {e['filename']: e.get('sig') for e in experiments.values()}
+    known.update(_unreadable_gifs)
+    added, changed, removed, deferred = diff_scan(known, snapshot(data_dir), time.time())
+    # A previously unreadable file that changed is new to the app, not replaced.
+    added += [rel for rel in changed if rel not in by_name]
+    changed = [rel for rel in changed if rel in by_name]
+    if not (added or changed or removed):
+        return f'{len(deferred)} still uploading' if deferred else ''
+
+    # Probing reads every frame header, so do it outside the lock.
+    probed = {rel: _probe_gif(os.path.join(data_dir, rel), rel)
+              for rel in added + changed}
+
+    n_add = n_change = n_remove = n_wait = 0
+    with _state_lock:
+        busy = _busy_exp_ids()
+        for rel in removed + changed + added:
+            eid = by_name.get(rel)
+            if eid in busy:
+                n_wait += 1
+                continue
+            if eid:
+                _drop_experiment(eid)
+            _unreadable_gifs.pop(rel, None)
+            # The store is keyed by filename, so stored metrics may describe
+            # an earlier file under the same name.
+            metrics_store.forget(_metrics_db, rel)
+            if rel in removed:
+                n_remove += 1
+                continue
+            entry = probed[rel]
+            if entry is None:
+                _unreadable_gifs[rel] = snapshot_sig(data_dir, rel)
+                continue
+            experiments[str(uuid.uuid4())[:8]] = entry
+            if rel in added:
+                n_add += 1
+            else:
+                n_change += 1
+
+    parts = []
+    if n_add:
+        parts.append(f'+{n_add} new')
+    if n_change:
+        parts.append(f'{n_change} replaced')
+    if n_remove:
+        parts.append(f'-{n_remove} removed')
+    if n_wait:
+        parts.append(f'{n_wait} waiting for a running tournament')
+    if deferred:
+        parts.append(f'{len(deferred)} still uploading')
+    return ', '.join(parts)
+
+
+_RESCAN_INTERVAL = 15  # seconds between data-dir / users.json polls
+
+
+def _rescan_worker(data_dir, users_path, trigger_path):
+    """Poll for new GIFs and an edited users.json, and apply them live.
+
+    Touching `trigger_path` forces a status line even when nothing changed
+    or the scan failed, which is how update-compare-game-data knows the
+    scan has run.
+    """
+    users_mtime = file_mtime(users_path) if users_path else None
+    trigger_mtime = file_mtime(trigger_path)
+    last_summary = ''
+    while True:
+        time.sleep(_RESCAN_INTERVAL)
+        t = file_mtime(trigger_path)
+        forced = t is not None and t != trigger_mtime
+        trigger_mtime = t
+        try:
+            if users_path:
+                m = file_mtime(users_path)
+                if m is not None and m != users_mtime:
+                    users_mtime = m
+                    reload_users_config(users_path)
+            summary = rescan_data_dir(data_dir)
+            # Waiting/uploading notes repeat every poll; log them once.
+            if forced or (summary and summary != last_summary):
+                with _state_lock:
+                    n = len(experiments)
+                note = f' ({summary})' if summary else ''
+                print(f'  [rescan] experiments has {n} GIF(s){note}', flush=True)
+            last_summary = summary
+        except Exception as e:
+            print(f'  [rescan] error: {e}', flush=True)
+            if forced:
+                print('  [rescan] FAILED, see error above', flush=True)
+
+
+def start_rescan_worker(data_dir, users_path, trigger_path):
+    threading.Thread(target=_rescan_worker, args=(data_dir, users_path, trigger_path),
+                     daemon=True).start()
 
 
 if __name__ == '__main__':

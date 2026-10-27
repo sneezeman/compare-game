@@ -28,9 +28,18 @@ venv/
 
 # Credentials / user config
 users.json
+users.json.bak.*
+users.json.tmp.*
 
 # Claude Code
 CLAUDE.md
 
 # Idle metrics precompute store
 metrics_cache.sqlite*
+
+# Deployment-local state
+/data/
+/results/
+/_deleted_lists/
+/nohup.out
+/.rescan-request

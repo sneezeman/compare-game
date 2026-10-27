@@ -269,9 +269,10 @@
             <h3 style="margin-top: 20px; color: #aaa;">Full Ranking</h3>
             <table id="full-ranking-table"></table>
             <div class="results-actions">
-                <button class="btn" onclick="exportResults()">Export Results</button>
-                <button class="btn btn-secondary" onclick="rerunSameROI()">Re-run (same ROI)</button>
-                <button class="btn btn-secondary" onclick="rerunWithNewROI()">New ROI</button>
+                <button class="btn live-result-only" onclick="exportResults()">Export Results</button>
+                <a id="results-download-btn" class="btn" style="display:none;">Download TSV</a>
+                <button class="btn btn-secondary live-result-only" onclick="rerunSameROI()">Re-run (same ROI)</button>
+                <button class="btn btn-secondary live-result-only" onclick="rerunWithNewROI()">New ROI</button>
                 <button class="btn btn-secondary" onclick="location.reload()">To the main screen</button>
             </div>
         </div>

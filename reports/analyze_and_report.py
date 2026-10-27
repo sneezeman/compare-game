@@ -51,7 +51,7 @@ def parse_tsv(path):
         if line.startswith('Date:'):
             info['date'] = line[5:].strip()
         elif line.startswith('User:'):
-            info['user'] = line[5:].strip()
+            info['user'] = canonical_rater(line[5:].strip())
         elif line.startswith('GIFs:'):
             info['gifs'] = [g.strip() for g in line[5:].split(',')]
         elif line.startswith('ROI:'):
@@ -126,6 +126,19 @@ RECENT_CUTOFF = '2026-04-01'
 # Below this, the section is replaced by a one-line note instead of a table that
 # would report, say, a "100% top-1" metric derived from a single tournament.
 MIN_ERA_N = 3
+
+
+# Login names that differ from the name a person typed before logins existed.
+# Keys are lowercase; matching ignores case.
+RATER_ALIASES = {
+    'yy': 'Yikai',
+    'jacob': 'jakob',
+}
+
+
+def canonical_rater(name):
+    """Map a login alias to the person's name; other names pass through."""
+    return RATER_ALIASES.get(name.lower(), name)
 
 
 def rater_names(files):

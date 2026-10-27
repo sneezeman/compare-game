@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""add-compare-game-user — add or update a Compare Game user.
+
+One-liners:
+    add-compare-game-user NAME PASSWORD DATASET [DATASET ...]   add, or replace
+    add-compare-game-user NAME --grant DATASET [DATASET ...]    add datasets, keep password
+    add-compare-game-user --list                                users and datasets
+    add-compare-game-user                                       interactive prompts
+
+DATASET is a path prefix matched against experiment filenames (e.g. ihls3905);
+* grants everything. The running app reloads users.json within ~15 s, so no
+restart is needed. Each write keeps a timestamped backup, and users.json and
+its backups are written mode 600 because they hold plaintext passwords.
+
+Paths follow the service's env vars:
+    COMPARE_USERS_CONFIG  (default /opt/compare-game/users.json)
+    COMPARE_DATA_DIR      (default /opt/compare-game/data/)
+"""
+
+import argparse
+import collections
+import getpass
+import json
+import os
+import shutil
+import sys
+from datetime import datetime
+
+USERS_PATH = os.environ.get('COMPARE_USERS_CONFIG', '/opt/compare-game/users.json')
+DATA_DIR = os.environ.get('COMPARE_DATA_DIR', '/opt/compare-game/data/')
+
+
+def die(msg, code=1):
+    print(f'error: {msg}', file=sys.stderr)
+    sys.exit(code)
+
+
+def ask(prompt, default=''):
+    try:
+        val = input(prompt).strip()
+    except EOFError:
+        val = ''
+    return val or default
+
+
+def ask_password():
+    """Hidden entry when on a terminal; plain read when piped (for testing)."""
+    reader = getpass.getpass if sys.stdin.isatty() else (lambda p: input(p))
+    while True:
+        pw = reader('Password: ').strip()
+        if not pw:
+            print('  password cannot be empty')
+            continue
+        again = reader('Repeat password: ').strip()
+        if pw != again:
+            print('  passwords do not match, try again')
+            continue
+        return pw
+
+
+def load_users():
+    if not os.path.isfile(USERS_PATH):
+        die(f'{USERS_PATH} not found')
+    try:
+        with open(USERS_PATH) as f:
+            return json.load(f, object_pairs_hook=collections.OrderedDict)
+    except json.JSONDecodeError as e:
+        die(f'{USERS_PATH} is not valid JSON: {e}')
+
+
+def available_datasets():
+    try:
+        return sorted(d for d in os.listdir(DATA_DIR)
+                      if os.path.isdir(os.path.join(DATA_DIR, d)))
+    except OSError:
+        return []
+
+
+def save_users(users):
+    """Timestamped backup, then atomic replace. Both end up mode 600."""
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup = f'{USERS_PATH}.bak.{stamp}'
+    shutil.copy2(USERS_PATH, backup)
+    os.chmod(backup, 0o600)
+
+    tmp = f'{USERS_PATH}.tmp.{os.getpid()}'
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(users, f, indent=2)
+        f.write('\n')
+    st = os.stat(USERS_PATH)
+    try:
+        os.chown(tmp, st.st_uid, st.st_gid)
+    except PermissionError:
+        pass
+    os.replace(tmp, USERS_PATH)  # atomic — never a half-written config
+    return backup
+
+
+def check_name(name):
+    if not name:
+        die('username cannot be empty')
+    if any(ch.isspace() or ch == ':' for ch in name):
+        die('username must not contain spaces or colons (breaks basic auth)')
+
+
+def normalize_dirs(dirs):
+    return ['*'] if '*' in dirs else list(dict.fromkeys(dirs))
+
+
+def warn_unknown(dirs, datasets):
+    unknown = [d for d in dirs if d != '*' and datasets and d.split('/')[0] not in datasets]
+    if unknown:
+        print(f'note: not in {DATA_DIR} yet: {", ".join(unknown)} '
+              '(fine if you upload it later; access is by name prefix)')
+
+
+def write(users, name, summary):
+    backup = save_users(users)
+    print(f'{summary}\nwrote {USERS_PATH} (backup: {os.path.basename(backup)})')
+    print('The running app applies this within ~15 s; no restart needed.')
+
+
+def list_users(users):
+    print(f'users file : {USERS_PATH}')
+    for u, c in users.items():
+        print(f'  {u:<12} {", ".join(c.get("dirs", []))}')
+    print('datasets   : ' + (', '.join(available_datasets()) or '(none found)'))
+
+
+def interactive(users):
+    list_users(users)
+    print()
+    name = ask('Username: ')
+    check_name(name)
+    if name in users and ask(f'"{name}" already exists — update it? [y/N]: ').lower() not in ('y', 'yes'):
+        print('aborted, nothing changed.')
+        return 0
+    password = ask_password()
+    print('\nWhich dataset(s) may this user see? Names separated by spaces, or * for all.')
+    dirs = ask('Dataset(s): ').split()
+    if not dirs:
+        die('dataset cannot be empty (use * for full access)')
+    dirs = normalize_dirs(dirs)
+    warn_unknown(dirs, available_datasets())
+    if ask(f'\nWrite "{name}" with access to {", ".join(dirs)}? [y/N]: ').lower() not in ('y', 'yes'):
+        print('aborted, nothing changed.')
+        return 0
+    action = 'updated' if name in users else 'added'
+    users[name] = collections.OrderedDict(password=password, dirs=dirs)
+    write(users, name, f'{action} "{name}": {", ".join(dirs)}')
+    return 0
+
+
+def main():
+    p = argparse.ArgumentParser(
+        description='Add or update a Compare Game user.',
+        epilog='Example: add-compare-game-user jakob s3cret ls3231 ihls3905')
+    p.add_argument('name', nargs='?')
+    p.add_argument('password', nargs='?')
+    p.add_argument('datasets', nargs='*')
+    p.add_argument('--grant', nargs='+', metavar='DATASET',
+                   help="add datasets to an existing user, keeping the password")
+    p.add_argument('--list', action='store_true', help='show users and datasets')
+    args = p.parse_args()
+
+    users = load_users()
+    if args.list:
+        list_users(users)
+        return 0
+    if not args.name:
+        return interactive(users)
+
+    check_name(args.name)
+    datasets = available_datasets()
+
+    if args.grant:
+        if args.password:
+            die('--grant keeps the password; do not pass one')
+        if args.name not in users:
+            die(f'no user "{args.name}"; add it with: NAME PASSWORD DATASET...')
+        dirs = normalize_dirs(list(users[args.name].get('dirs', [])) + args.grant)
+        warn_unknown(args.grant, datasets)
+        users[args.name]['dirs'] = dirs
+        write(users, args.name, f'"{args.name}" now sees: {", ".join(dirs)}')
+        return 0
+
+    if not args.password or not args.datasets:
+        die('usage: add-compare-game-user NAME PASSWORD DATASET [DATASET ...]')
+    dirs = normalize_dirs(args.datasets)
+    warn_unknown(dirs, datasets)
+    action = 'updated' if args.name in users else 'added'
+    users[args.name] = collections.OrderedDict(password=args.password, dirs=dirs)
+    write(users, args.name, f'{action} "{args.name}": {", ".join(dirs)}')
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print('\naborted, nothing changed.')
+        sys.exit(130)

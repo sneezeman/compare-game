@@ -353,13 +353,34 @@ async function loadPastResults() {
                     <span class="past-result-gifs">${escapeHtml(gifsStr)}</span>
                     <span class="past-result-top3">${escapeHtml(r.top3 || '')}</span>
                 </div>
+                <button class="btn btn-secondary past-result-view" style="padding: 4px 12px; font-size: 0.8em;">View</button>
                 <a href="/api/past-results/${escapeHtml(r.filename)}" class="btn btn-secondary" style="padding: 4px 12px; font-size: 0.8em;">Download</a>
             `;
+            div.querySelector('.past-result-view').addEventListener('click', () => viewPastResult(r.filename));
             list.appendChild(div);
         });
     } catch (e) {
         // ignore
     }
+}
+
+// Reopen the results screen of a saved tournament.
+async function viewPastResult(filename) {
+    const url = '/api/past-results/view/' + filename.split('/').map(encodeURIComponent).join('/');
+    let data;
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+    } catch (e) {
+        alert(`Could not open this result: ${e.message}`);
+        return;
+    }
+    state.roi = data.roi || null;
+    state.crossViewJobId = null;
+    showResults(data.ranking, data.top3, data.all_metrics, null, null, data.eval_command,
+                { skipped: data.eval_skipped, winnerIsRaw: data.eval_winner_is_raw },
+                { date: data.date, user: data.user, filename: data.filename });
 }
 
 function updateStartButton() {
@@ -1747,7 +1768,7 @@ function renderTop3() {
         `/api/frame/${c.exp_id}/${c.epoch}?w=${t3ImgSize}${roiParam}`;
     const medals = ['1st', '2nd', '3rd'];
     document.getElementById('t3-label').textContent =
-        `${medals[t3Idx] || (t3Idx + 1)} — ${c.label}`;
+        `${medals[c.rank ?? t3Idx] || ((c.rank ?? t3Idx) + 1)} — ${c.label}`;
     document.getElementById('t3-pos').textContent = `${t3Idx + 1} / ${t3Items.length}`;
 }
 
@@ -1894,9 +1915,24 @@ async function copyEvalCommand() {
     }
 }
 
-async function showResults(ranking, top3, serverMetrics, savePath, confidence, evalCommand, evalInfo) {
+// `saved` is set when reopening a saved result: {date, user, filename}.
+async function showResults(ranking, top3, serverMetrics, savePath, confidence, evalCommand, evalInfo, saved) {
     showPhase('results');
     document.removeEventListener('keydown', handleTournamentKey);
+    window.scrollTo(0, 0);
+
+    // A reopened result has no live session, so it cannot be re-run or
+    // re-exported; the saved TSV is offered for download instead.
+    document.querySelectorAll('.live-result-only').forEach(el => {
+        el.style.display = saved ? 'none' : '';
+    });
+    const dl = document.getElementById('results-download-btn');
+    if (dl) {
+        dl.style.display = saved ? '' : 'none';
+        if (saved) dl.href = '/api/past-results/' + saved.filename.split('/').map(encodeURIComponent).join('/');
+    }
+    const crossView = document.getElementById('cross-view-section');
+    if (crossView && saved) crossView.style.display = 'none';
 
     const podium = document.getElementById('results-podium');
     podium.innerHTML = '';
@@ -1913,8 +1949,9 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence, e
         winnerIsRaw: evalInfo && evalInfo.winnerIsRaw,
     });
 
-    // Top-3 ROI viewer for one last visual sanity check
-    showTop3Viewer(top3);
+    // Top-3 ROI viewer for one last visual sanity check. Candidates of a
+    // saved result whose GIF is no longer on the server have no exp_id.
+    showTop3Viewer(top3.map((c, i) => ({ ...c, rank: i })).filter(c => c.exp_id));
 
     // Start polling the cross-view job (if one exists)
     if (state.crossViewJobId) {
@@ -1957,7 +1994,7 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence, e
     let rows = '';
     for (let i = 0; i < ranking.length; i++) {
         rows += `<tr><td>${i + 1}</td><td>${escapeHtml(ranking[i].label)}</td>`;
-        allMetrics[i].forEach((m, mi) => {
+        (allMetrics[i] || []).forEach((m, mi) => {
             const range = metricMaxs[mi] - metricMins[mi];
             const t = range > 0 ? (m.value - metricMins[mi]) / range : 0.5;
             const color = metricColor(t);
@@ -1971,10 +2008,13 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence, e
     // Show save notification
     const existingNote = document.querySelector('.save-notification');
     if (existingNote) existingNote.remove();
-    if (savePath) {
+    if (savePath || saved) {
         const saveNote = document.createElement('p');
         saveNote.className = 'save-notification';
-        saveNote.textContent = `Results auto-saved to ${savePath}`;
+        saveNote.textContent = saved
+            ? `Saved result from ${saved.date ? formatIsoDate(saved.date) : saved.filename}`
+              + (saved.user ? ` by ${saved.user}` : '') + ` (${saved.filename})`
+            : `Results auto-saved to ${savePath}`;
         const resultsSection = document.getElementById('results-section');
         resultsSection.insertBefore(saveNote, resultsSection.children[1]);
     }

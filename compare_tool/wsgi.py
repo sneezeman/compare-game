@@ -13,6 +13,13 @@ Usage:
 Required environment variables:
     COMPARE_DATA_DIR          Path to directory containing GIF files
     COMPARE_USERS_CONFIG      Path to users.json (for basic auth)
+
+Optional:
+    COMPARE_RESCAN_TRIGGER    File whose mtime forces a rescan status line
+                              (default /opt/compare-game/.rescan-request)
+
+New GIFs and users.json edits are picked up live (polled every 15 s), so a
+restart is needed only for code changes.
 """
 
 import os
@@ -25,7 +32,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # the SAME module object in sys.modules['app']. There is no dual-module
 # issue — globals modified by load_users_config() / load_data_dir() are
 # visible to check_auth() and the route handlers.
-from app import app, load_data_dir, scan_past_results, load_users_config
+from app import (app, load_data_dir, load_users_config, scan_past_results,
+                 start_rescan_worker)
 import app as app_module
 
 # ---------------------------------------------------------------------------
@@ -59,6 +67,11 @@ if not app_module.experiments:
 
 # Scan past results
 scan_past_results()
+
+# Pick up uploads and users.json edits without a restart
+start_rescan_worker(data_dir, users_cfg,
+                    os.environ.get('COMPARE_RESCAN_TRIGGER',
+                                   '/opt/compare-game/.rescan-request'))
 
 # Caddy on the same host terminates TLS and forwards to us. Trust exactly
 # one upstream proxy hop so request.remote_addr reflects the real client IP

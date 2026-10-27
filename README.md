@@ -121,7 +121,10 @@ Once done, you'll see:
 - A podium with the **top epochs**
 - A full ranking table with all image quality metrics (color-coded)
 - Results are **auto-saved** to `DATA_DIR/results/` as TSV
+- A copy-pastable `./submit_eval.sh` command for the winning epoch (set the metadata dir once; the browser remembers it)
 - Options to **export results**, **re-run** with the same ROI, pick a **new ROI**, or **start over**
+
+To reopen the results screen of any finished tournament, expand **Past Results** on the main screen and click **View**. Candidates whose GIF is still on the server also appear in the top-3 viewer.
 
 ### Keyboard Shortcuts (Tournament Phase)
 
@@ -181,4 +184,32 @@ data/
 │   └── all_epochs_view2_5-180.gif
 └── results/
     └── tournament_2026-03-18_143022.tsv   (auto-saved)
+```
+
+## Production deployment (arts-toy VPS)
+
+- `compare-game.service` runs gunicorn (`--workers 1 --threads 4`, `127.0.0.1:8001`) from `/opt/compare-game`; Caddy terminates TLS on `:443`. One worker is mandatory, because tournament state lives in memory.
+- Env: `COMPARE_DATA_DIR` (datasets as subdirectories), `COMPARE_USERS_CONFIG` (`users.json`), `COMPARE_RESULTS_DIR`, `COMPARE_METRICS_DB` (SQLite metrics store, warmed by an idle background worker).
+- The app polls the data dir and `users.json` every 15 s and applies changes live. Unchanged GIFs keep their IDs, and a GIF used by a running tournament is left alone until that tournament ends. Restart only after code changes.
+
+### Operator commands (`bin/`, symlinked into `/usr/local/bin`)
+
+```bash
+update-compare-game-data             # rescan now and print the GIF count
+update-compare-game-data --restart   # restart the service (after a code deploy)
+
+add-compare-game-user NAME PASSWORD DATASET [DATASET ...]   # add or replace a user
+add-compare-game-user NAME --grant DATASET [DATASET ...]    # add datasets, keep password
+add-compare-game-user --list                                # users and datasets
+add-compare-game-user                                       # interactive
+```
+
+`users.json` holds plaintext passwords; the command writes it and its backups mode 600. A `DATASET` is a path prefix (`ls3231`, `ls3231/finetune`); `*` grants everything.
+
+### Deploying code
+
+```bash
+cd /opt/compare-game && git pull --ff-only
+/opt/venv/bin/python -m pytest -q compare_tool
+update-compare-game-data --restart
 ```

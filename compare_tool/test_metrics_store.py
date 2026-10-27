@@ -54,3 +54,12 @@ def test_connect_creates_missing_db_and_schema(tmp_path):
     # Opening a brand-new path must just work (schema created on open).
     conn = ms.connect(str(tmp_path / "nested" / "new.sqlite"))
     assert ms.present_frames(conn, 0.5) == set()
+
+
+def test_forget_drops_only_that_gif(tmp_path):
+    conn = ms.connect(str(tmp_path / "m.sqlite"))
+    ms.put(conn, "a.gif", 0, 0.5, M)
+    ms.put(conn, "a.gif", 1, 0.5, M)
+    ms.put(conn, "b.gif", 0, 0.5, M)
+    ms.forget(conn, "a.gif")
+    assert ms.present_frames(conn, 0.5) == {("b.gif", 0)}

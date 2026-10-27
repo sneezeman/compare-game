@@ -84,3 +84,10 @@ def present_frames(conn, r_o):
         "SELECT gif_filename, epoch FROM metrics WHERE r_o=?", (float(r_o),)
     )
     return {(name, epoch) for name, epoch in cur.fetchall()}
+
+
+def forget(conn, filename):
+    """Delete every stored frame of one GIF, e.g. after it was replaced."""
+    with _write_lock:
+        conn.execute("DELETE FROM metrics WHERE gif_filename=?", (filename,))
+        conn.commit()

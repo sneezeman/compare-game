@@ -1,0 +1,61 @@
+#!/bin/bash
+# update-compare-game-data — make the running app show the data dir as it is now.
+#
+# The app polls /opt/compare-game/data every 15 s and picks up new, replaced
+# and deleted GIFs by itself. This command asks for an immediate scan and
+# reports the resulting GIF count, so an upload can be confirmed.
+#
+# Usage:
+#   update-compare-game-data             rescan live (tournaments keep running)
+#   update-compare-game-data --restart   restart the service (after code changes)
+
+set -u
+SVC=compare-game.service
+DATA=/opt/compare-game/data
+TRIGGER=${COMPARE_RESCAN_TRIGGER:-/opt/compare-game/.rescan-request}
+
+restart() {
+    echo "[update] restarting $SVC (drops tournaments in progress)..."
+    local boot
+    boot=$(date '+%Y-%m-%d %H:%M:%S')
+    systemctl restart "$SVC" || { echo "[update] ERROR: restart failed" >&2; exit 1; }
+    echo "[update] waiting for the cold scan (~1-4 min)..."
+    for _ in $(seq 1 90); do
+        line=$(journalctl -u "$SVC" --no-pager --since "$boot" \
+               | grep -oE "\[wsgi\] experiments has [0-9]+ GIF.*" | tail -1)
+        [ -n "$line" ] && { echo "[update] $line"; return; }
+        sleep 6
+    done
+    echo "[update] WARNING: no scan line after 9 min; check journalctl -u $SVC" >&2
+}
+
+on_disk=$(find "$DATA" -name '*.gif' -not -name '.*' 2>/dev/null | wc -l)
+echo "[update] $on_disk GIF(s) on disk"
+
+if [ "${1:-}" = "--restart" ]; then
+    restart
+else
+    since=$(date '+%Y-%m-%d %H:%M:%S')
+    touch "$TRIGGER"
+    echo "[update] asked the app to rescan; waiting for it (up to ~1.5 min)..."
+    line=
+    for _ in $(seq 1 30); do
+        sleep 3
+        line=$(journalctl -u "$SVC" --no-pager --since "$since" \
+               | grep -oE "\[rescan\] (experiments has [0-9]+ GIF.*|FAILED.*)" | tail -1)
+        [ -n "$line" ] && break
+    done
+    case "$line" in
+        *FAILED*)
+            echo "[update] the rescan failed:" >&2
+            journalctl -u "$SVC" --no-pager --since "$since" | grep "\[rescan\] error" | tail -3 >&2
+            exit 1 ;;
+        "")
+            echo "[update] no answer from the app after 90 s. Check: journalctl -u $SVC -n 50" >&2
+            echo "[update] 'update-compare-game-data --restart' forces a rescan but drops running tournaments." >&2
+            exit 1 ;;
+        *) echo "[update] ${line#\[rescan\] }" ;;
+    esac
+fi
+
+echo "[update] service: $(systemctl is-active "$SVC"), restarts: $(systemctl show "$SVC" -p NRestarts --value)"
