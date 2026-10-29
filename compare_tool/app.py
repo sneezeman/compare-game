@@ -5,6 +5,7 @@ Flask server for the Compare Game — epoch comparison tool.
 import argparse
 import hmac
 import io
+import itertools
 import json
 import os
 import queue
@@ -27,7 +28,8 @@ from eval_export import (build_csv, build_sh, collect_eval_rows,
 from precompute import (build_worklist, is_idle, scan_is_settled,
                         sibling_filenames)
 from gif_loader import (compute_label_exclusion, compute_variability_map,
-                        detect_label_present, extract_frames, suggest_rois,
+                        detect_label_present, extract_frames_u8, frame_to_float,
+                        suggest_rois,
                         variability_to_heatmap_rgba)
 from metrics import (compute_all, compute_metric_zscores, METRIC_GROUPS,
                      METRICS, ELIMINATION_METRICS, ELIMINATION_SETS,
@@ -116,7 +118,10 @@ def _user_can_access(username, filename):
     dirs = cfg.get('dirs', [])
     if '*' in dirs:
         return True
-    return any(filename.startswith(d) for d in dirs)
+
+    # Match whole path components, so 'ls3231' never grants 'ls32310/'.
+    return any(filename == d.rstrip('/') or filename.startswith(d.rstrip('/') + '/')
+               for d in dirs if d.strip('/'))
 
 
 # Rate limiting / auto-ban for failed auth attempts
@@ -139,6 +144,11 @@ def check_auth():
     # Health check and logout — exempt from auth
     if request.path in ('/health', '/logout'):
         return
+
+    # Browsers resend cached Basic credentials on cross-site POSTs (CSRF).
+    if (request.method == 'POST'
+            and request.headers.get('Sec-Fetch-Site', 'same-origin') not in ('same-origin', 'none')):
+        return ('Cross-site request refused', 403)
 
     # Drop banned IPs (expire after 1 hour)
     with _state_lock:
@@ -175,6 +185,19 @@ def check_auth():
 
     g.username = auth.username
 
+@app.after_request
+def security_headers(resp):
+    # Inline handlers still need 'unsafe-inline'. The policy's value is that
+    # an injected script can't load code from, or send data to, another host.
+    resp.headers.setdefault('Content-Security-Policy',
+                            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                            "style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; "
+                            "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+                            "form-action 'self'")
+    resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    return resp
+
+
 @app.route('/logout')
 def logout():
     """Force the browser to drop its cached Basic-auth credentials."""
@@ -191,6 +214,50 @@ def _check_exp_access(exp_id):
     if username and not _user_can_access(username, exp['filename']):
         return None, (jsonify(error='Access denied'), 403)
     return exp, None
+
+
+def _json_body():
+    """The request's JSON object, or {}.
+
+    Only application/json is parsed, so a cross-site form can't post here
+    without a CORS preflight.
+    """
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
+
+
+def _parse_r_o(value):
+    """r_o snapped to the UI's 0.05 grid in [0.05, 1.0], or None if invalid.
+
+    Snapping bounds the metrics cache to 20 keys per frame and ROI.
+    """
+    try:
+        r = round(float(value) * 20) / 20
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return r if 0.05 <= r <= 1.0 else None
+
+
+def _parse_roi(value):
+    """ROI as a canonical 'x,y,w,h' string, '' for none, or None if invalid."""
+    if not value:
+        return ''
+    try:
+        x, y, w, h = (int(p) for p in str(value).split(','))
+    except ValueError:
+        return None
+    if min(x, y) < 0 or min(w, h) < 1 or max(x, y, w, h) > 100_000:
+        return None
+    return f'{x},{y},{w},{h}'
+
+
+def _bad_params(r_o, roi):
+    """400 response when r_o or roi failed to parse, else None."""
+    if r_o is None:
+        return jsonify(error='Invalid r_o'), 400
+    if roi is None:
+        return jsonify(error='Invalid roi'), 400
+    return None
 
 
 def _format_exp_label(filename):
@@ -246,6 +313,7 @@ experiments = {}
 tournaments = {}
 # Metrics cache: (exp_id, epoch, roi, r_o) -> metrics list
 _metrics_cache = {}
+_load_locks = {}  # exp_id -> lock held while that GIF decodes
 # LRU tracking: exp_id -> last_access_time (for frame eviction)
 _access_times = {}
 _MAX_LOADED = 3  # max experiments with frames in memory at once
@@ -301,6 +369,27 @@ def parse_epoch_config_from_name(name):
         config['raw_first'] = True
 
     return config if config else None
+
+
+def _clean_epoch_config(posted):
+    """A posted epoch config reduced to bounded ints and a bool, or None if invalid."""
+    if not isinstance(posted, dict):
+        return None
+    config = {'source': 'user', 'raw_first': posted.get('raw_first') is True}
+    for key, lo in (('start', 0), ('end', 0), ('step', 1)):
+        val = posted.get(key)
+        if val is None or val == '':
+            continue
+        if isinstance(val, bool) or not isinstance(val, (int, float, str)):
+            return None
+        try:
+            val = int(val)
+        except (ValueError, OverflowError):
+            return None
+        if not lo <= val <= 100_000:
+            return None
+        config[key] = val
+    return config
 
 
 def generate_epoch_labels(num_epochs, start=None, end=None, step=None, raw_first=False):
@@ -370,12 +459,12 @@ def _get_cached_metrics(exp_id, epoch, roi_str, r_o):
                 _metrics_cache[key] = stored
             return stored
 
-    exp = _ensure_loaded(exp_id)
-    if not exp or epoch < 0 or epoch >= exp['num_epochs']:
+    loaded = _load(exp_id)
+    if not loaded or not 0 <= epoch < len(loaded[1]):
         return None
+    exp, frames, _ = loaded
 
-    img = exp['frames'][epoch]
-    img = _apply_roi(img, roi_str)
+    img = frame_to_float(_apply_roi(frames[epoch], roi_str))
     results = compute_all(img, r_o=r_o)
     with _state_lock:
         if len(_metrics_cache) >= _MAX_METRICS_CACHE:
@@ -531,7 +620,7 @@ def view_past_result(filename):
     names = saved['metric_names']
     higher = {name: hib for name, _, hib in METRICS}
     if all(len(row['values']) == len(names) for row in saved['ranking']):
-        all_metrics = [[{'name': n, 'value': v, 'higher_is_better': higher.get(n, True)}
+        all_metrics = [[{'name': n, 'value': _json_number(v), 'higher_is_better': higher.get(n, True)}
                         for n, v in zip(names, row['values'])]
                        for row in saved['ranking']]
     else:
@@ -572,7 +661,7 @@ def _selected_filenames(exp_ids):
 
 
 def _eval_rows_for_request():
-    data = request.get_json(silent=True) or {}
+    data = _json_body()
     selected = _selected_filenames(data.get('exp_ids'))
     return collect_eval_rows(_accessible_results(), selected_filenames=selected)
 
@@ -599,27 +688,28 @@ def get_frame(exp_id, epoch):
     exp, err = _check_exp_access(exp_id)
     if err:
         return err
-    exp = _ensure_loaded(exp_id)
-    if not exp:
+    loaded = _load(exp_id)
+    if not loaded:
         return jsonify(error='Experiment not found'), 404
-    if epoch < 0 or epoch >= exp['num_epochs']:
+    frames = loaded[1]
+    if not 0 <= epoch < len(frames):
         return jsonify(error='Invalid epoch'), 400
 
-    img = exp['frames'][epoch]
-    img = _apply_roi(img, request.args.get('roi'))
+    img = _apply_roi(frames[epoch], request.args.get('roi'))
 
     # Optional resize for thumbnails: ?w=140
     w = request.args.get('w')
     if w:
-        w = int(w)
+        try:
+            w = int(w)
+        except ValueError:
+            return jsonify(error='Invalid w'), 400
         h, orig_w = img.shape[:2]
+
+        # Thumbnails only shrink, which also bounds new_h by the crop height.
+        w = min(max(w, 16), orig_w)
         new_h = max(1, int(h * w / orig_w))
-        pil_img = Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8))
-        pil_img = pil_img.resize((w, new_h), Image.LANCZOS)
-        buf = io.BytesIO()
-        pil_img.save(buf, format='PNG')
-        buf.seek(0)
-        return send_file(buf, mimetype='image/png')
+        img = np.asarray(Image.fromarray(img).resize((w, new_h), Image.LANCZOS))
 
     return _numpy_to_png_response(img)
 
@@ -630,11 +720,11 @@ def get_variability(exp_id):
     exp, err = _check_exp_access(exp_id)
     if err:
         return err
-    exp = _ensure_loaded(exp_id)
-    if not exp:
+    loaded = _load(exp_id)
+    if not loaded:
         return jsonify(error='Experiment not found'), 404
 
-    rgba = variability_to_heatmap_rgba(exp['variability'])
+    rgba = variability_to_heatmap_rgba(loaded[2])
     img = Image.fromarray(rgba, 'RGBA')
     buf = io.BytesIO()
     img.save(buf, format='PNG')
@@ -648,10 +738,10 @@ def get_first_frame(exp_id):
     exp, err = _check_exp_access(exp_id)
     if err:
         return err
-    exp = _ensure_loaded(exp_id)
-    if not exp:
+    loaded = _load(exp_id)
+    if not loaded:
         return jsonify(error='Experiment not found'), 404
-    return _numpy_to_png_response(exp['frames'][0])
+    return _numpy_to_png_response(loaded[1][0])
 
 
 @app.route('/api/roi-suggestions/<exp_id>')
@@ -660,18 +750,19 @@ def get_roi_suggestions(exp_id):
     exp, err = _check_exp_access(exp_id)
     if err:
         return err
-    exp = _ensure_loaded(exp_id)
-    if not exp:
+    loaded = _load(exp_id)
+    if not loaded:
         return jsonify(error='Experiment not found'), 404
+    exp, _, variability = loaded
 
-    H, W = exp['variability'].shape
+    H, W = variability.shape
     ex, ey, ew, eh = compute_label_exclusion(W, H)
     label_present = exp.get('label_present', True)
     # Only restrict the corner when a label was actually detected. When absent,
     # the corner is free for ROI selection (no exclusion, and suggest_rois may
     # use it). The frontend defaults its manual toggle to label_detected.
     exclusion_box = (ex, ey, ew, eh) if label_present else None
-    rois = suggest_rois(exp['variability'], exclusion_box=exclusion_box)
+    rois = suggest_rois(variability, exclusion_box=exclusion_box)
     return jsonify(
         suggestions=rois,
         label_detected=bool(label_present),
@@ -694,10 +785,15 @@ def get_metrics(exp_id, epoch):
     if epoch < 0 or epoch >= exp['num_epochs']:
         return jsonify(error='Invalid epoch'), 400
 
-    r_o = float(request.args.get('r_o', 0.5))
-    roi_str = request.args.get('roi')
+    r_o = _parse_r_o(request.args.get('r_o', DEFAULT_R_O))
+    roi_str = _parse_roi(request.args.get('roi'))
+    bad = _bad_params(r_o, roi_str)
+    if bad:
+        return bad
 
     results = _get_cached_metrics(exp_id, epoch, roi_str, r_o)
+    if results is None:
+        return jsonify(error='Experiment changed on disk; reload the page'), 409
 
     # Build lookup: metric name -> group info
     group_lookup = {}
@@ -737,14 +833,23 @@ def get_epoch_config():
 def set_epoch_config():
     """Update epoch config for experiments (access-checked)."""
     username = getattr(g, 'username', None)
-    data = request.get_json(force=True)
-    for exp_id, config in data.get('experiments', {}).items():
+    data = _json_body()
+    items = data.get('experiments')
+    if not isinstance(items, dict):
+        return jsonify(error='No experiments specified'), 400
+    cleaned = {}
+    for exp_id, posted in items.items():
+        config = _clean_epoch_config(posted)
+        if config is None:
+            return jsonify(error=f'Invalid epoch config for {exp_id}'), 400
+        cleaned[exp_id] = config
+
+    for exp_id, config in cleaned.items():
         exp = experiments.get(exp_id)
         if not exp:
             continue
         if username and not _user_can_access(username, exp['filename']):
             continue
-        config['source'] = 'user'
         exp['epoch_config'] = config
         exp['epoch_labels'] = generate_epoch_labels(
             exp['num_epochs'],
@@ -760,7 +865,7 @@ def set_epoch_config():
 def prefilter_list():
     """Fast: return just the candidate list (no metric computation) plus
     ROI flag. The frontend then fetches metrics per-candidate with progress."""
-    data = request.get_json(force=True) if request.data else {}
+    data = _json_body()
     exps_config = data.get('experiments', [])
     roi = data.get('roi')
     if not exps_config:
@@ -799,11 +904,17 @@ def prefilter_list():
 def prefilter_metric():
     """Return raw elimination-metric values for one candidate.
     Body: {exp_id, epoch, r_o, roi, use_roi: bool}"""
-    data = request.get_json(force=True) if request.data else {}
+    data = _json_body()
     exp_id = data.get('exp_id')
-    epoch = int(data.get('epoch', 0))
-    r_o = float(data.get('r_o', 0.5))
-    roi = data.get('roi') if data.get('use_roi', True) else None
+    try:
+        epoch = int(data.get('epoch', 0))
+    except (TypeError, ValueError):
+        return jsonify(error='Invalid epoch'), 400
+    r_o = _parse_r_o(data.get('r_o', DEFAULT_R_O))
+    roi = _parse_roi(data.get('roi')) if data.get('use_roi', True) else ''
+    bad = _bad_params(r_o, roi)
+    if bad:
+        return bad
 
     exp, err = _check_exp_access(exp_id)
     if err:
@@ -815,106 +926,14 @@ def prefilter_metric():
         return jsonify(error='Invalid epoch'), 400
 
     metrics = _get_cached_metrics(exp_id, epoch, roi, r_o)
+    if metrics is None:
+        return jsonify(error='Experiment changed on disk; reload the page'), 409
     # Union of all sets, not just the active one: compute_all produces every
     # metric anyway, so returning them lets the client re-rank on a set switch
     # without another round of (expensive) computation.
     values = {name: round(val, 6) for name, val, _ in metrics
               if name in ELIMINATION_METRIC_UNION}
     return jsonify(values=values)
-
-
-@app.route('/api/prefilter', methods=['POST'])
-def prefilter():
-    """Compute metrics for all candidates and return them sorted by consensus score.
-    Body: {experiments: [{exp_id}, ...], r_o: 0.5, roi: "x,y,w,h", cut_frac: 0.25}
-    Returns sorted candidates with scores and a cutoff index."""
-    data = request.get_json(force=True) if request.data else {}
-    exps_config = data.get('experiments', [])
-    r_o = float(data.get('r_o', 0.5))
-    roi = data.get('roi')
-    cut_frac = float(data.get('cut_frac', 0.25))
-
-    if not exps_config:
-        return jsonify(error='No experiments specified'), 400
-
-    # Build candidate list (same logic as start_tournament)
-    candidates = []
-    for ec in exps_config:
-        exp, err = _check_exp_access(ec['exp_id'])
-        if err:
-            return err
-        exp = _ensure_loaded(ec['exp_id'])
-        if not exp:
-            return jsonify(error=f'Experiment {ec["exp_id"]} not found'), 404
-        exp_label = _format_exp_label(exp['filename'])
-        epoch_labels = exp.get('epoch_labels',
-                               [f'Ep.{i + 1}' for i in range(exp['num_epochs'])])
-        for epoch in range(exp['num_epochs']):
-            epoch_label = epoch_labels[epoch] if epoch < len(epoch_labels) else f'Ep.{epoch + 1}'
-            candidates.append({
-                'exp_id': ec['exp_id'],
-                'epoch': epoch,
-                'label': f'{exp_label} {epoch_label}',
-            })
-
-    if len(candidates) < 4:
-        return jsonify(error='Too few candidates for pre-filtering'), 400
-
-    # Compute the consensus elimination score for one ROI setting.
-    def _consensus_scores(use_roi):
-        raw = []
-        for c in candidates:
-            m = _get_cached_metrics(c['exp_id'], c['epoch'],
-                                    roi if use_roi else None, r_o)
-            raw.append({name: val for name, val, _ in m if name in ELIMINATION_METRICS})
-        # Z-score each metric across candidates, then weighted mean
-        zsum = [0.0] * len(candidates)
-        zcount = [0] * len(candidates)
-        for mname, weight in ELIMINATION_METRICS.items():
-            vals = [r.get(mname, 0) for r in raw]
-            mean = float(np.mean(vals))
-            std = float(np.std(vals))
-            for i, v in enumerate(vals):
-                z = (v - mean) / std if std > 1e-10 else 0.0
-                zsum[i] += z * weight
-                zcount[i] += 1
-        return [zsum[i] / zcount[i] if zcount[i] else 0.0 for i in range(len(candidates))]
-
-    scores_roi = _consensus_scores(use_roi=True)
-    # Only compute full-image scores separately if an ROI is actually set,
-    # otherwise they're identical.
-    scores_full = _consensus_scores(use_roi=False) if roi else list(scores_roi)
-
-    scored = []
-    for i, c in enumerate(candidates):
-        scored.append({
-            'exp_id': c['exp_id'],
-            'epoch': c['epoch'],
-            'label': c['label'],
-            'score': float(scores_roi[i]),
-            'score_full': float(scores_full[i]),
-        })
-
-    # Sort best → worst by ROI score (default)
-    scored.sort(key=lambda s: s['score'], reverse=True)
-
-    # Cutoff index: keep top (1 - cut_frac), at least 3
-    import math
-    n_keep = max(3, math.ceil(len(scored) * (1 - cut_frac)))
-    cutoff = n_keep
-
-    return jsonify(
-        candidates=[{
-            'exp_id': s['exp_id'],
-            'epoch': s['epoch'],
-            'label': s['label'],
-            'score': round(s['score'], 3),
-            'score_full': round(s['score_full'], 3),
-        } for s in scored],
-        cutoff=cutoff,
-        total=len(scored),
-        has_roi=bool(roi),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -927,6 +946,8 @@ def prefilter():
 
 _cross_view_queue = queue.Queue()
 _cross_view_jobs = {}  # job_id -> dict
+_CROSS_VIEW_MAX_CANDIDATES = 500
+_CROSS_VIEW_JOB_TTL = 3600  # seconds
 
 
 def _find_sibling_exp_id(exp_id, target_view):
@@ -953,7 +974,7 @@ def _cross_view_worker():
         job = _cross_view_queue.get()
         job_id = job['job_id']
         state = _cross_view_jobs.get(job_id)
-        if not state:
+        if not state or state['status'] != 'pending':
             continue
         try:
             state['status'] = 'running'
@@ -1101,18 +1122,44 @@ _precompute_thread.start()
 def cross_view_start():
     """Kick off background computation of sibling-view metrics.
     Body: {candidates: [{exp_id, epoch, label}, ...], r_o: 0.5}"""
-    data = request.get_json(force=True) if request.data else {}
-    candidates = data.get('candidates', [])
-    r_o = float(data.get('r_o', 0.5))
-    if not candidates:
+    data = _json_body()
+    posted = data.get('candidates')
+    r_o = _parse_r_o(data.get('r_o', DEFAULT_R_O))
+    if r_o is None:
+        return jsonify(error='Invalid r_o'), 400
+    if not isinstance(posted, list) or not posted:
         return jsonify(error='No candidates'), 400
+    if len(posted) > _CROSS_VIEW_MAX_CANDIDATES:
+        return jsonify(error='Too many candidates'), 400
 
+    candidates = []
+    for c in posted:
+        if not isinstance(c, dict) or not isinstance(c.get('epoch'), int):
+            return jsonify(error='Invalid candidate'), 400
+        _, err = _check_exp_access(c.get('exp_id'))
+        if err:
+            return err
+        candidates.append({'exp_id': c['exp_id'], 'epoch': c['epoch'],
+                           'label': str(c.get('label', ''))})
+
+    now = time.time()
     job_id = str(uuid.uuid4())[:8]
-    _cross_view_jobs[job_id] = {
-        'status': 'pending',
-        'progress': {'done': 0, 'total': 0},
-        'views': {},
-    }
+    with _state_lock:
+        for old_id in [j for j, st in _cross_view_jobs.items()
+                       if now - st['created'] > _CROSS_VIEW_JOB_TTL]:
+            del _cross_view_jobs[old_id]
+
+        # One queued job per user: a newer request supersedes the older one.
+        for st in _cross_view_jobs.values():
+            if st['username'] == getattr(g, 'username', None) and st['status'] == 'pending':
+                st['status'] = 'superseded'
+        _cross_view_jobs[job_id] = {
+            'status': 'pending',
+            'progress': {'done': 0, 'total': 0},
+            'views': {},
+            'username': getattr(g, 'username', None),
+            'created': now,
+        }
     _cross_view_queue.put({'job_id': job_id, 'candidates': candidates, 'r_o': r_o})
     return jsonify(job_id=job_id)
 
@@ -1120,9 +1167,10 @@ def cross_view_start():
 @app.route('/api/cross-view/status/<job_id>')
 def cross_view_status(job_id):
     state = _cross_view_jobs.get(job_id)
-    if not state:
+    if not state or state['username'] != getattr(g, 'username', None):
         return jsonify(error='Unknown job'), 404
-    return jsonify(**state)
+    return jsonify(status=state['status'], progress=state['progress'],
+                   views=state['views'], error=state.get('error'))
 
 
 @app.route('/api/tournament/start', methods=['POST'])
@@ -1130,10 +1178,13 @@ def start_tournament():
     """Start a tournament with one or more experiments.
     Body: {experiments: [{exp_id}, ...], r_o: 0.5, roi: "x,y,w,h"}
     Each (exp_id, epoch) pair is a separate candidate."""
-    data = request.get_json(force=True) if request.data else {}
+    data = _json_body()
     exps_config = data.get('experiments', [])
-    r_o = float(data.get('r_o', 0.5))
-    roi = data.get('roi')
+    r_o = _parse_r_o(data.get('r_o', DEFAULT_R_O))
+    roi = _parse_roi(data.get('roi'))
+    bad = _bad_params(r_o, roi)
+    if bad:
+        return bad
     # The logged-in identity wins: it is authenticated, so results can't be
     # attributed to someone else. The posted name is only a fallback for
     # deployments running without auth (no users.json configured).
@@ -1226,6 +1277,31 @@ def _pair_info(candidates, pair):
     }
 
 
+@app.route('/api/tournament/<session_id>')
+def tournament_state(session_id):
+    """Current pair and settings of a tournament, so a reloaded page can resume."""
+    tdata = tournaments.get(session_id)
+    if not tdata or (tdata.get('username') is not None
+                     and tdata.get('username') != getattr(g, 'username', None)):
+        return jsonify(error='No active tournament'), 404
+
+    t = tdata['tournament']
+    with _state_lock:
+        pair = t.current_pair()
+        current, total = t.progress()
+        done = t.is_done()
+        selected = [{'expId': eid, 'filename': experiments[eid]['filename']}
+                    for eid in tdata['selected_exp_ids'] if eid in experiments]
+    return jsonify(
+        pair=_pair_info(tdata['candidates'], pair),
+        progress={'current': current, 'total': total},
+        done=done,
+        roi=tdata['roi'] or None,
+        r_o=tdata['r_o'],
+        selected=selected,
+    )
+
+
 @app.route('/api/tournament/<session_id>/choice', methods=['POST'])
 def tournament_choice(session_id):
     """Submit a choice: {winner: "left"|"right"|"tie"}.
@@ -1240,7 +1316,7 @@ def tournament_choice(session_id):
 
     t = tdata['tournament']
     candidates = tdata['candidates']
-    data = request.get_json(force=True)
+    data = _json_body()
     winner = data.get('winner')
     tie_explanation = None
 
@@ -1253,6 +1329,8 @@ def tournament_choice(session_id):
 
             metrics_a = _get_cached_metrics(ca['exp_id'], ca['epoch'], roi, r_o)
             metrics_b = _get_cached_metrics(cb['exp_id'], cb['epoch'], roi, r_o)
+            if metrics_a is None or metrics_b is None:
+                return jsonify(error='A GIF in this pair changed on disk; pick a winner instead'), 409
 
             # Z-score normalization: only count votes where |z| > 0.5.
             # Each redundancy cluster votes as one unit (via its representative)
@@ -1315,8 +1393,6 @@ def tournament_choice(session_id):
         done = t.is_done()
         results = list(t.results) if t.results else None
         top_k = list(t.get_top_k()) if t.get_top_k() else None
-        ci = t.get_confidence_intervals()
-        history = t.get_history()
 
     result = {
         'pair': _pair_info(candidates, pair),
@@ -1331,32 +1407,21 @@ def tournament_choice(session_id):
         ranking = [candidates[i] for i in results]
         top3 = [candidates[i] for i in (top_k or [])]
 
-        confidence = []
-        for item_idx in results:
-            if item_idx in ci:
-                confidence.append(ci[item_idx])
-            else:
-                confidence.append(None)
-
         # Compute metrics for all ranked candidates
         roi = tdata['roi']
         r_o = tdata['r_o']
-        all_metrics = []
-        for c in ranking:
-            metrics = _get_cached_metrics(c['exp_id'], c['epoch'], roi, r_o)
-            all_metrics.append(metrics)
+        all_metrics = _ranking_metrics(ranking, roi, r_o)
 
         # Auto-save (includes choice history)
-        save_path = _auto_save_results(ranking, all_metrics, tdata, confidence)
+        save_path = _auto_save_results(ranking, all_metrics, tdata)
 
         result['ranking'] = ranking
         result['top3'] = top3
         # Copy-pastable eval command for the winner (None for training tiles,
         # which have no checkpoint to evaluate against).
         result.update(_eval_command_payload(ranking))
-        result['confidence'] = confidence
         result['all_metrics'] = [
-            [{'name': n, 'value': round(v, 6), 'higher_is_better': h} for n, v, h in m]
+            [{'name': n, 'value': _json_number(v), 'higher_is_better': h} for n, v, h in m]
             for m in all_metrics
         ]
         if save_path:
@@ -1408,34 +1473,27 @@ def tournament_finish(session_id):
         t.force_finish()
         results = list(t.results) if t.results else []
         top_k = list(t.get_top_k()) if t.get_top_k() else []
-        ci = t.get_confidence_intervals()
+        current, total = t.progress()
 
     ranking = [candidates[i] for i in results]
     top3 = [candidates[i] for i in top_k]
-    confidence = []
-    for item_idx in t.results:
-        confidence.append(ci.get(item_idx))
 
     roi = tdata['roi']
     r_o = tdata['r_o']
-    all_metrics = []
-    for c in ranking:
-        metrics = _get_cached_metrics(c['exp_id'], c['epoch'], roi, r_o)
-        all_metrics.append(metrics)
+    all_metrics = _ranking_metrics(ranking, roi, r_o)
 
-    save_path = _auto_save_results(ranking, all_metrics, tdata, confidence)
+    save_path = _auto_save_results(ranking, all_metrics, tdata)
 
     result = {
         'pair': None,
-        'progress': t.progress(),
+        'progress': {'current': current, 'total': total},
         'done': True,
         'ranking': ranking,
         'top3': top3,
         # Copy-pastable eval command for the winner (see tournament_choice).
         **_eval_command_payload(ranking),
-        'confidence': confidence,
         'all_metrics': [
-            [{'name': n, 'value': round(v, 6), 'higher_is_better': h} for n, v, h in m]
+            [{'name': n, 'value': _json_number(v), 'higher_is_better': h} for n, v, h in m]
             for m in all_metrics
         ],
     }
@@ -1466,30 +1524,38 @@ def _apply_roi(img, roi_str):
 
 
 def _numpy_to_png_response(img):
-    """Convert a [0,1] grayscale numpy array to a PNG response."""
-    arr = (np.clip(img, 0, 1) * 255).astype(np.uint8)
-    pil_img = Image.fromarray(arr, 'L')
+    """Convert a uint8 grayscale numpy array to a PNG response."""
+    pil_img = Image.fromarray(img, 'L')
     buf = io.BytesIO()
     pil_img.save(buf, format='PNG')
     buf.seek(0)
     return send_file(buf, mimetype='image/png')
 
 
-def _rank_values(values, higher_is_better=True):
-    """Rank values (1 = best)."""
-    indexed = list(enumerate(values))
-    indexed.sort(key=lambda x: x[1], reverse=higher_is_better)
-    ranks = [0] * len(values)
-    for rank, (idx, _) in enumerate(indexed, 1):
-        ranks[idx] = rank
-    return ranks
+def _ranking_metrics(ranking, roi, r_o):
+    """Metrics for each ranked candidate.
+
+    A GIF that a rescan dropped mid-tournament gets NaN values, so the result
+    and its choice history are still saved.
+    """
+    all_metrics = [_get_cached_metrics(c['exp_id'], c['epoch'], roi, r_o) for c in ranking]
+    template = next((m for m in all_metrics if m), [])
+    return [m if m is not None else [(n, float('nan'), h) for n, _, h in template]
+            for m in all_metrics]
 
 
-def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
-    """Save tournament results to TSV with Spearman correlations and choice history."""
+def _json_number(v):
+    """A metric value rounded for JSON; NaN becomes null, which JSON can carry."""
+    return None if v != v else round(v, 6)
+
+
+def _auto_save_results(ranking, all_metrics, tdata):
+    """Save tournament results and the choice history to a TSV.
+
+    Only the top 3 are ordered. The tournament stops merging once it knows
+    them, so later rows keep a partial order.
+    """
     try:
-        from scipy.stats import spearmanr
-
         t = tdata['tournament']
         roi = tdata.get('roi')
         r_o = tdata.get('r_o', 0.5)
@@ -1521,39 +1587,15 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
         lines.append(f'Top 3: {", ".join(top3_labels)}')
         lines.append('')
 
-        # Confidence intervals
-        if confidence:
-            lines.append('Ranking Confidence')
-            for i, (c, ci) in enumerate(zip(ranking, confidence)):
-                label = c.get('full_label', c['label'])
-                if ci:
-                    lines.append(f'{i+1}\t{label}\trank {ci["rank_lower"]}-{ci["rank_upper"]}\t'
-                                 f'strength={ci["strength"]:.4f}\tconf={ci["confidence"]:.2f}')
-                else:
-                    lines.append(f'{i+1}\t{label}')
-            lines.append('')
-
         # TSV table
         if not all_metrics:
-            return save_path  # nothing to save
+            return None
         metric_names = [n for n, _, _ in all_metrics[0]]
         lines.append('\t'.join(['Rank', 'Candidate'] + metric_names))
         for i, (c, metrics) in enumerate(zip(ranking, all_metrics)):
             label = c.get('full_label', c['label'])
             vals = [f'{v:.6f}' for _, v, _ in metrics]
             lines.append('\t'.join([str(i + 1), label] + vals))
-
-        # Metric vs manual rank correlations
-        n = len(ranking)
-        if n >= 4:
-            lines.append('')
-            lines.append('Metric vs Manual Rank (Spearman correlation)')
-            manual_ranks = list(range(1, n + 1))
-            for mi, (name, _, hib) in enumerate(all_metrics[0]):
-                metric_vals = [all_metrics[i][mi][1] for i in range(n)]
-                metric_ranks = _rank_values(metric_vals, higher_is_better=hib)
-                rho, pval = spearmanr(manual_ranks, metric_ranks)
-                lines.append(f'{name}\trho={rho:.4f}\tp={pval:.4f}')
 
         # Pairwise choice history
         history = t.get_history()
@@ -1571,17 +1613,23 @@ def _auto_save_results(ranking, all_metrics, tdata, confidence=None):
                 ]))
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H%M%S')
-        filename = f'tournament_{timestamp}.tsv'
 
         # Mirror the experiment folder structure inside results_dir
         gif_dirs = [os.path.dirname(gn) for gn in gif_names]
         sub_dir = os.path.commonpath(gif_dirs) if gif_dirs else ''
         dest_dir = os.path.join(results_dir, sub_dir)
         os.makedirs(dest_dir, exist_ok=True)
-        save_path = os.path.join(dest_dir, filename)
 
-        with open(save_path, 'w') as f:
-            f.write('\n'.join(lines) + '\n')
+        # Two tournaments finishing in the same second get _2, _3, ...
+        for n in itertools.count(1):
+            suffix = '' if n == 1 else f'_{n}'
+            save_path = os.path.join(dest_dir, f'tournament_{timestamp}{suffix}.tsv')
+            try:
+                with open(save_path, 'x') as f:
+                    f.write('\n'.join(lines) + '\n')
+                break
+            except FileExistsError:
+                continue
 
         print(f'Results saved to {save_path}')
 
@@ -1619,62 +1667,78 @@ def _evict_lru():
         print(f'  Evicted {exp["filename"]} to free memory')
 
 
-def _ensure_loaded(exp_id):
-    """Lazy-load frames for an experiment if not yet loaded."""
-    exp = experiments.get(exp_id)
-    if not exp:
-        return None
-    if 'frames' in exp:
-        with _state_lock:
-            _access_times[exp_id] = time.time()
-        return exp  # already loaded
+def _load(exp_id):
+    """(exp, frames, variability) with the GIF decoded, or None.
 
+    Callers keep the returned arrays, so a concurrent LRU eviction can't pull
+    them away mid-request. Decoding runs outside _state_lock so other requests
+    keep flowing, and a per-GIF lock stops two requests decoding one GIF twice.
+    """
     with _state_lock:
-        # Double-check after acquiring lock
+        exp = experiments.get(exp_id)
+        if not exp:
+            return None
         if 'frames' in exp:
             _access_times[exp_id] = time.time()
-            return exp
+            return exp, exp['frames'], exp['variability']
+        load_lock = _load_locks.setdefault(exp_id, threading.Lock())
 
-        # Evict old experiments before loading new one
-        _evict_lru()
+    with load_lock:
+        with _state_lock:
+            if experiments.get(exp_id) is not exp:
+                return None
+            if 'frames' in exp:
+                _access_times[exp_id] = time.time()
+                return exp, exp['frames'], exp['variability']
 
-        # Load from path
-        print(f'  Loading {exp["filename"]}...')
-        frames = extract_frames(exp['gif_path'])
+        print(f'  Loading {exp["filename"]}...', flush=True)
+        frames = extract_frames_u8(exp['gif_path'])
         if len(frames) < 2:
             return None
         variability = compute_variability_map(frames)
-        exp['frames'] = frames
-        exp['variability'] = variability
-        exp['num_epochs'] = len(frames)
-        exp['height'] = frames[0].shape[0]
-        exp['width'] = frames[0].shape[1]
-        # Detect whether the burned-in top-right label is actually present
-        # (the highest-epoch frame carries a numeric label if any do). Stored
-        # as a persistent scalar — it survives LRU frame eviction.
         H0, W0 = frames[0].shape
-        exp['label_present'] = detect_label_present(
-            frames[-1], compute_label_exclusion(W0, H0))
-        _access_times[exp_id] = time.time()
-        # Regenerate labels if frame count changed
-        if len(exp.get('epoch_labels', [])) != len(frames):
-            ec = exp.get('epoch_config', {})
-            # Re-check raw_first auto-detection with actual frame count
-            if (not ec.get('raw_first')
-                    and ec.get('start') is not None
-                    and ec.get('end') is not None):
-                expected = ec['end'] - ec['start'] + 1
-                step = ec.get('step')
-                if step and step > 1:
-                    expected = (ec['end'] - ec['start']) // step + 1
-                if len(frames) == expected + 1:
-                    ec['raw_first'] = True
-            exp['epoch_labels'] = generate_epoch_labels(
-                len(frames), ec.get('start'), ec.get('end'),
-                ec.get('step'), ec.get('raw_first', False),
-            )
-        print(f'  Loaded {exp["filename"]} ({len(frames)} epochs, {exp["width"]}x{exp["height"]})')
-    return exp
+
+        # The highest-epoch frame carries a burned-in label if any frame does.
+        label_present = detect_label_present(
+            frame_to_float(frames[-1]), compute_label_exclusion(W0, H0))
+
+        with _state_lock:
+            # A rescan dropped or replaced this GIF while it was decoding.
+            if experiments.get(exp_id) is not exp:
+                return None
+            exp['frames'] = frames
+            exp['variability'] = variability
+            exp['num_epochs'] = len(frames)
+            exp['height'], exp['width'] = H0, W0
+            exp['label_present'] = label_present
+            _access_times[exp_id] = time.time()
+            _evict_lru()
+
+            # Regenerate labels if frame count changed
+            if len(exp.get('epoch_labels', [])) != len(frames):
+                ec = exp.get('epoch_config', {})
+                # Re-check raw_first auto-detection with actual frame count
+                if (not ec.get('raw_first')
+                        and ec.get('start') is not None
+                        and ec.get('end') is not None):
+                    expected = ec['end'] - ec['start'] + 1
+                    step = ec.get('step')
+                    if step and step > 1:
+                        expected = (ec['end'] - ec['start']) // step + 1
+                    if len(frames) == expected + 1:
+                        ec['raw_first'] = True
+                exp['epoch_labels'] = generate_epoch_labels(
+                    len(frames), ec.get('start'), ec.get('end'),
+                    ec.get('step'), ec.get('raw_first', False),
+                )
+        print(f'  Loaded {exp["filename"]} ({len(frames)} epochs, {W0}x{H0})', flush=True)
+    return exp, frames, variability
+
+
+def _ensure_loaded(exp_id):
+    """Decode an experiment's GIF if needed; the experiment dict, or None."""
+    loaded = _load(exp_id)
+    return loaded[0] if loaded else None
 
 
 def scan_past_results():

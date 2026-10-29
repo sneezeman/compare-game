@@ -78,7 +78,7 @@ def available_datasets():
 
 def save_users(users):
     """Timestamped backup, then atomic replace. Both end up mode 600."""
-    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     backup = f'{USERS_PATH}.bak.{stamp}'
     shutil.copy2(USERS_PATH, backup)
     os.chmod(backup, 0o600)

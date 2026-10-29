@@ -1,9 +1,19 @@
 // Compare Game — Frontend Logic
 
+// The server's error text when it sent one, else the HTTP status.
+async function serverError(resp) {
+    try {
+        const data = await resp.json();
+        if (data && data.error) return data.error;
+    } catch (e) { /* body is not JSON */ }
+    return `Server error: ${resp.status}`;
+}
+
+// Safe in element text and in quoted attributes.
 function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    return String(str ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c]);
 }
 
 const state = {
@@ -274,7 +284,7 @@ async function exportEval(kind) {
             body: JSON.stringify({ exp_ids: expIds }),
         });
         if (!resp.ok) {
-            alert(`Export failed (${resp.status})`);
+            alert(`Export failed: ${await serverError(resp)}`);
             return;
         }
         const blob = await resp.blob();
@@ -370,7 +380,7 @@ async function viewPastResult(filename) {
     let data;
     try {
         const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        if (!resp.ok) throw new Error(await serverError(resp));
         data = await resp.json();
     } catch (e) {
         alert(`Could not open this result: ${e.message}`);
@@ -378,7 +388,7 @@ async function viewPastResult(filename) {
     }
     state.roi = data.roi || null;
     state.crossViewJobId = null;
-    showResults(data.ranking, data.top3, data.all_metrics, null, null, data.eval_command,
+    showResults(data.ranking, data.top3, data.all_metrics, null, data.eval_command,
                 { skipped: data.eval_skipped, winnerIsRaw: data.eval_winner_is_raw },
                 { date: data.date, user: data.user, filename: data.filename });
 }
@@ -433,7 +443,7 @@ async function startWithSelected() {
         ));
         for (const r of responses) {
             if (!r.ok) {
-                alert(`Error loading GIF: ${r.status}`);
+                alert(`Error loading GIF: ${await serverError(r)}`);
                 btn.disabled = false;
                 updateStartButton();
                 return;
@@ -504,9 +514,9 @@ async function showEpochConfig() {
             <div class="epoch-config-card">
                 <div class="epoch-config-gif-name">${escapeHtml(gifName)}</div>
                 <div class="epoch-config-row">
-                    <label>Start: <input type="number" class="ec-start" data-idx="${i}" value="${expConfig.start ?? ''}" placeholder="e.g. 100"></label>
-                    <label>End: <input type="number" class="ec-end" data-idx="${i}" value="${expConfig.end ?? ''}" placeholder="optional"></label>
-                    <label>Step: <input type="number" class="ec-step" data-idx="${i}" value="${expConfig.step ?? ''}" placeholder="1" min="1"></label>
+                    <label>Start: <input type="number" class="ec-start" data-idx="${i}" value="${escapeHtml(expConfig.start)}" placeholder="e.g. 100"></label>
+                    <label>End: <input type="number" class="ec-end" data-idx="${i}" value="${escapeHtml(expConfig.end)}" placeholder="optional"></label>
+                    <label>Step: <input type="number" class="ec-step" data-idx="${i}" value="${escapeHtml(expConfig.step)}" placeholder="1" min="1"></label>
                     <label class="checkbox-label" style="gap: 6px;">
                         <input type="checkbox" class="ec-raw" data-idx="${i}" ${expConfig.raw_first ? 'checked' : ''}>
                         RAW
@@ -563,11 +573,12 @@ async function submitEpochConfig() {
     }
 
     if (anyConfig) {
-        await fetch('/api/epoch-config', {
+        const resp = await fetch('/api/epoch-config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ experiments: config }),
         });
+        if (!resp.ok) { alert(await serverError(resp)); return; }
     }
 
     showPhase('roi');
@@ -960,7 +971,7 @@ async function showPrefilter() {
         if (!listResp.ok || listData.error) {
             progress.style.display = 'none';
             document.getElementById('pf-label-left').innerHTML =
-                `<span style="color:#e94560">Error: ${listData.error || listResp.status}. Use "Skip".</span>`;
+                `<span style="color:#e94560">Error: ${escapeHtml(listData.error || listResp.status)}. Use "Skip".</span>`;
             return;
         }
 
@@ -1136,8 +1147,8 @@ async function pollCrossView(jobId, top3, ranking) {
                 return;
             }
             const data = await resp.json();
-            if (data.status === 'missing') {
-                section.style.display = 'none';  // no sibling views available
+            if (data.status === 'missing' || data.status === 'superseded') {
+                section.style.display = 'none';  // no sibling views, or a newer job replaced it
                 return;
             }
             if (data.status === 'error') {
@@ -1390,17 +1401,18 @@ async function startTournament() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ experiments: expsConfig, roi: state.roi, r_o: state.rO, user_name: state.userName, exclude }),
         });
-        if (!resp.ok) { alert('Server error: ' + resp.status); return; }
+        if (!resp.ok) { alert(await serverError(resp)); return; }
         const data = await resp.json();
 
         if (data.error) { alert(data.error); return; }
 
         state.sessionId = data.session_id;
         state.currentPair = data.pair;
+        rememberSession(data.session_id);
 
         // Handle immediate completion (e.g., 1 candidate after RAW exclusion)
         if (data.done) {
-            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command,
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.eval_command,
                         { skipped: data.eval_skipped, winnerIsRaw: data.eval_winner_is_raw });
             return;
         }
@@ -1485,7 +1497,7 @@ function handleTournamentKey(e) {
     } else if (e.key === 'Enter') {
         e.preventDefault();
         submitChoice('tie');
-    } else if (e.ctrlKey && e.key === 'z') {
+    } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         undoChoice();
     } else if (e.key === 'Escape') {
@@ -1656,7 +1668,7 @@ async function submitChoice(winner) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ winner }),
         });
-        if (!resp.ok) { alert('Server error: ' + resp.status); return; }
+        if (!resp.ok) { alert(await serverError(resp)); return; }
         const data = await resp.json();
         updateProgress(data.progress);
 
@@ -1671,7 +1683,7 @@ async function submitChoice(winner) {
         }
 
         if (data.done) {
-            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command,
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.eval_command,
                         { skipped: data.eval_skipped, winnerIsRaw: data.eval_winner_is_raw });
             return;
         }
@@ -1694,10 +1706,10 @@ async function finishEarly() {
     state.submitting = true;
     try {
         const resp = await fetch(`/api/tournament/${state.sessionId}/finish`, { method: 'POST' });
-        if (!resp.ok) { alert('Server error: ' + resp.status); return; }
+        if (!resp.ok) { alert(await serverError(resp)); return; }
         const data = await resp.json();
         if (data.done) {
-            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.confidence, data.eval_command,
+            showResults(data.ranking, data.top3, data.all_metrics, data.save_path, data.eval_command,
                         { skipped: data.eval_skipped, winnerIsRaw: data.eval_winner_is_raw });
         }
     } catch (e) {
@@ -1712,7 +1724,7 @@ async function undoChoice() {
     state.submitting = true;
     try {
         const resp = await fetch(`/api/tournament/${state.sessionId}/undo`, { method: 'POST' });
-        if (!resp.ok) { alert('Server error: ' + resp.status); return; }
+        if (!resp.ok) { alert(await serverError(resp)); return; }
         const data = await resp.json();
         if (!data.undone) return;
 
@@ -1926,7 +1938,8 @@ async function copyEvalCommand() {
 }
 
 // `saved` is set when reopening a saved result: {date, user, filename}.
-async function showResults(ranking, top3, serverMetrics, savePath, confidence, evalCommand, evalInfo, saved) {
+async function showResults(ranking, top3, serverMetrics, savePath, evalCommand, evalInfo, saved) {
+    if (!saved) rememberSession(null);
     showPhase('results');
     document.removeEventListener('keydown', handleTournamentKey);
     window.scrollTo(0, 0);
@@ -1994,8 +2007,10 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence, e
     for (let mi = 0; mi < numMetrics; mi++) {
         let min = Infinity, max = -Infinity;
         for (const em of allMetrics) {
-            if (em[mi].value < min) min = em[mi].value;
-            if (em[mi].value > max) max = em[mi].value;
+            const v = (em[mi] || {}).value;
+            if (v == null) continue;  // GIF left mid-tournament
+            if (v < min) min = v;
+            if (v > max) max = v;
         }
         metricMins.push(min);
         metricMaxs.push(max);
@@ -2003,12 +2018,15 @@ async function showResults(ranking, top3, serverMetrics, savePath, confidence, e
 
     let rows = '';
     for (let i = 0; i < ranking.length; i++) {
-        rows += `<tr><td>${i + 1}</td><td>${escapeHtml(ranking[i].label)}</td>`;
+        // The tournament orders only the top 3; later rows keep a partial order.
+        const rank = i < 3 ? i + 1 : '–';
+        rows += `<tr><td>${rank}</td><td>${escapeHtml(ranking[i].label)}</td>`;
         (allMetrics[i] || []).forEach((m, mi) => {
             const range = metricMaxs[mi] - metricMins[mi];
             const t = range > 0 ? (m.value - metricMins[mi]) / range : 0.5;
             const color = metricColor(t);
-            rows += `<td style="color:${color}">${m.value.toFixed(4)}</td>`;
+            rows += m.value == null ? '<td>–</td>'
+                : `<td style="color:${color}">${m.value.toFixed(4)}</td>`;
         });
         rows += '</tr>';
     }
@@ -2049,7 +2067,7 @@ function exportResults() {
     const metricNames = r.allMetrics[0].map(m => m.name);
     lines.push(['Rank', 'Candidate', ...metricNames].join('\t'));
     for (let i = 0; i < r.ranking.length; i++) {
-        const vals = r.allMetrics[i].map(m => m.value.toFixed(6));
+        const vals = r.allMetrics[i].map(m => (m.value == null ? 'nan' : m.value.toFixed(6)));
         lines.push([i + 1, r.ranking[i].full_label || r.ranking[i].label, ...vals].join('\t'));
     }
 
@@ -2077,7 +2095,58 @@ function rerunSameROI() {
 // Init
 // =========================================================================
 
+// The server keeps a tournament for 24 h, so a reload can pick it up again.
+const SESSION_KEY = 'compareGame.sessionId';
+
+function rememberSession(sessionId) {
+    try {
+        if (sessionId) localStorage.setItem(SESSION_KEY, sessionId);
+        else localStorage.removeItem(SESSION_KEY);
+    } catch (e) { /* storage blocked */ }
+}
+
+async function resumeTournament() {
+    let sessionId = null;
+    try { sessionId = localStorage.getItem(SESSION_KEY); } catch (e) { return; }
+    if (!sessionId) return;
+
+    let data;
+    try {
+        const resp = await fetch(`/api/tournament/${encodeURIComponent(sessionId)}`);
+        if (!resp.ok) { rememberSession(null); return; }
+        data = await resp.json();
+    } catch (e) {
+        return;
+    }
+    if (data.done || !data.pair) { rememberSession(null); return; }
+
+    const p = data.progress;
+    if (!confirm(`Resume your unfinished comparison (${p.current} of ~${p.total} done)?`)) {
+        rememberSession(null);
+        return;
+    }
+    state.sessionId = sessionId;
+    state.currentPair = data.pair;
+    state.roi = data.roi || null;
+    state.rO = data.r_o;
+    state.selected = data.selected;
+    prefilterCandidates = [];
+    showPhase('tournament');
+    updateProgress(data.progress);
+    buildComparisonImages();
+    initTournamentUI();
+    loadComparison();
+}
+
+window.addEventListener('beforeunload', (e) => {
+    if (document.getElementById('phase-tournament').classList.contains('active')) {
+        e.preventDefault();
+        e.returnValue = '';
+    }
+});
+
 document.addEventListener('DOMContentLoaded', () => {
     showPhase('upload');
     initUpload();
+    resumeTournament();
 });

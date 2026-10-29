@@ -177,3 +177,132 @@ def test_users_file_rejects_string_dirs(app_mod, tmp_path):
     users.write_text(json.dumps({'a': {'password': 5}}))
     assert not app_mod.reload_users_config(str(users))
     assert app_mod._user_config['a']['dirs'] == ['ds']
+
+
+def _two_tenants(app_mod, tmp_path):
+    """GIFs in ds and ds2; user u (password p) may see only ds."""
+    data = tmp_path / 'data'
+    _gif(data / 'ds' / 'a_rec_' / 'all_epochs_view0_0-3.gif', n_frames=4)
+    _gif(data / 'ds2' / 'b_rec_' / 'all_epochs_view0_0-3.gif', n_frames=4)
+    app_mod.load_data_dir(str(data))
+    app_mod._user_config = {'u': {'password': 'p', 'dirs': ['ds']}}
+    ids = _ids(app_mod)
+    return (ids['ds/a_rec_/all_epochs_view0_0-3.gif'],
+            ids['ds2/b_rec_/all_epochs_view0_0-3.gif'],
+            {'Authorization': 'Basic dTpw'})  # u:p
+
+
+def test_prefix_grant_matches_whole_path_components(app_mod):
+    app_mod._user_config = {'u': {'password': 'p', 'dirs': ['ls3231']}}
+    assert app_mod._user_can_access('u', 'ls3231/a.gif')
+    assert not app_mod._user_can_access('u', 'ls32310/a.gif')
+    assert not app_mod._user_can_access('u', 'ls3231_extra/a.gif')
+
+
+def test_epoch_config_rejects_markup(app_mod, tmp_path):
+    own, _, auth = _two_tenants(app_mod, tmp_path)
+    client = app_mod.app.test_client()
+    bad = {'experiments': {own: {'start': 0, 'end': '"><img src=x onerror=alert(1)>'}}}
+    r = client.post('/api/epoch-config', json=bad, headers=auth)
+    assert r.status_code == 400
+    assert app_mod.experiments[own]['epoch_config'].get('end') != bad['experiments'][own]['end']
+
+    ok = {'experiments': {own: {'start': '10', 'end': 13, 'step': None, 'raw_first': 'yes'}}}
+    assert client.post('/api/epoch-config', json=ok, headers=auth).status_code == 200
+    assert app_mod.experiments[own]['epoch_config'] == {
+        'source': 'user', 'raw_first': False, 'start': 10, 'end': 13}
+
+
+def test_cross_view_checks_access_and_owner(app_mod, tmp_path):
+    own, foreign, auth = _two_tenants(app_mod, tmp_path)
+    client = app_mod.app.test_client()
+    r = client.post('/api/cross-view/start', headers=auth,
+                    json={'candidates': [{'exp_id': foreign, 'epoch': 0}]})
+    assert r.status_code == 403
+
+    r = client.post('/api/cross-view/start', headers=auth,
+                    json={'candidates': [{'exp_id': own, 'epoch': 0}]})
+    assert r.status_code == 200
+    job = r.get_json()['job_id']
+    app_mod._user_config['v'] = {'password': 'p', 'dirs': ['*']}
+    other = {'Authorization': 'Basic djpw'}  # v:p
+    assert client.get(f'/api/cross-view/status/{job}', headers=other).status_code == 404
+    assert client.get(f'/api/cross-view/status/{job}', headers=auth).status_code == 200
+
+
+def test_bad_params_get_400_not_500(app_mod, tmp_path):
+    own, _, auth = _two_tenants(app_mod, tmp_path)
+    client = app_mod.app.test_client()
+    assert client.get(f'/api/metrics/{own}/1?r_o=abc', headers=auth).status_code == 400
+    assert client.get(f'/api/metrics/{own}/1?roi=1,2', headers=auth).status_code == 400
+    assert client.get(f'/api/metrics/{own}/1?r_o=0.52', headers=auth).status_code == 200
+    r = client.get(f'/api/frame/{own}/1?w=100000', headers=auth)
+    assert r.status_code == 200
+    full_w = app_mod._load(own)[1][0].shape[1]
+    assert Image.open(__import__('io').BytesIO(r.data)).size[0] == full_w
+    assert client.get(f'/api/frame/{own}/1?w=x', headers=auth).status_code == 400
+
+
+def test_cross_site_post_refused(app_mod, tmp_path):
+    own, _, auth = _two_tenants(app_mod, tmp_path)
+    client = app_mod.app.test_client()
+    body = {'experiments': {own: {'start': 0}}}
+    r = client.post('/api/epoch-config', json=body,
+                    headers={**auth, 'Sec-Fetch-Site': 'cross-site'})
+    assert r.status_code == 403
+    r = client.post('/api/epoch-config', data=json.dumps(body),
+                    headers={**auth, 'Content-Type': 'text/plain'})
+    assert r.status_code == 400
+
+
+def test_resume_returns_current_pair_to_owner_only(app_mod, tmp_path):
+    own, _, auth = _two_tenants(app_mod, tmp_path)
+    client = app_mod.app.test_client()
+    r = client.post('/api/tournament/start', headers=auth,
+                    json={'experiments': [{'exp_id': own}]})
+    sid = r.get_json()['session_id']
+    state = client.get(f'/api/tournament/{sid}', headers=auth).get_json()
+    assert state['pair'] == r.get_json()['pair'] and not state['done']
+    assert state['selected'][0]['expId'] == own
+    app_mod._user_config['v'] = {'password': 'p', 'dirs': ['*']}
+    assert client.get(f'/api/tournament/{sid}', headers={'Authorization': 'Basic djpw'}).status_code == 404
+
+
+def test_same_second_results_do_not_overwrite(app_mod, tmp_path):
+    own, _, auth = _two_tenants(app_mod, tmp_path)
+    client = app_mod.app.test_client()
+    for _ in range(2):
+        sid = client.post('/api/tournament/start', headers=auth,
+                          json={'experiments': [{'exp_id': own}]}).get_json()['session_id']
+        assert client.post(f'/api/tournament/{sid}/finish', headers=auth).status_code == 200
+    saved = list((tmp_path / 'results').rglob('tournament_*.tsv'))
+    assert len(saved) == 2
+
+
+def test_thumbnail_of_narrow_roi_stays_small(app_mod, tmp_path):
+    own, _, auth = _two_tenants(app_mod, tmp_path)
+    client = app_mod.app.test_client()
+    r = client.get(f'/api/frame/{own}/0?roi=0,0,1,8&w=2000', headers=auth)
+    assert r.status_code == 200
+    assert Image.open(__import__('io').BytesIO(r.data)).size == (1, 8)
+
+
+def test_epoch_config_is_all_or_nothing(app_mod, tmp_path):
+    own, _, auth = _two_tenants(app_mod, tmp_path)
+    client = app_mod.app.test_client()
+    before = dict(app_mod.experiments[own]['epoch_config'])
+    body = {'experiments': {own: {'start': 5}, 'x': {'start': 'bad'}}}
+    assert client.post('/api/epoch-config', json=body, headers=auth).status_code == 400
+    assert app_mod.experiments[own]['epoch_config'] == before
+
+
+def test_finish_saves_even_if_a_gif_left(app_mod, tmp_path):
+    own, _, auth = _two_tenants(app_mod, tmp_path)
+    client = app_mod.app.test_client()
+    sid = client.post('/api/tournament/start', headers=auth,
+                      json={'experiments': [{'exp_id': own}]}).get_json()['session_id']
+    app_mod._metrics_cache.clear()
+    app_mod.experiments.pop(own)  # what a rescan does when the GIF is replaced
+    r = client.post(f'/api/tournament/{sid}/finish', headers=auth)
+    assert r.status_code == 200
+    assert list((tmp_path / 'results').rglob('tournament_*.tsv'))

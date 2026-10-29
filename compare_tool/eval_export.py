@@ -28,8 +28,11 @@ EvalRow = namedtuple('EvalRow', [
 _WINNER_RE = re.compile(r'^(?P<gif>.+?)\s+Ep\.(?P<ep>\d+)\s*$')
 # Same, but for the RAW frame of a raw_first GIF (no epoch number).
 _RAW_WINNER_RE = re.compile(r'^(?P<gif>.+?)\s+RAW\s*$')
+# Directory names go inside double quotes in generated shell lines, so they
+# may only hold word characters, dots and dashes. Anything else gets no command.
+#
 # Finetune dir: <meta>_rec_ _from_ <ckpt>_rec_ _ <finetune_epoch>
-_FT_DIR_RE = re.compile(r'^(?P<meta>.+?_rec_)_from_(?P<ckpt>.+?_rec_)_(?P<fe>\d+)$')
+_FT_DIR_RE = re.compile(r'^(?P<meta>[\w.-]+?_rec_)_from_(?P<ckpt>[\w.-]+?_rec_)_(?P<fe>\d+)$')
 # Short tile token (e.g. T01, T002) as an underscore-delimited segment. The tile
 # isn't always right before `_rec_` — names vary: `..._T01_rec_`,
 # `..._T002_0001_rec_`, `..._T03_050nm_rec_`. The leading delimiter keeps the `T`
@@ -38,7 +41,7 @@ _TILE_RE = re.compile(r'(?:^|_)(T\d+)(?:_|$)')
 # A plain training-run directory: the whole dir name IS the metadata, ending in
 # `_rec_`/`_rec` (no `_from_` checkpoint). Tile names vary a lot across datasets
 # — some carry no T<number> token at all — so match only the _rec suffix.
-_TRAIN_DIR_RE = re.compile(r'^(?!.*_from_).+_rec_?$')
+_TRAIN_DIR_RE = re.compile(r'^(?!.*_from_)[\w.-]+_rec_?$')
 
 
 def _parse_winner(top3):

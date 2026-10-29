@@ -237,10 +237,6 @@ class Tournament:
         """Return full comparison history."""
         return list(self.history)
 
-    def get_confidence_intervals(self):
-        """Not available for merge-sort tournament."""
-        return {}
-
     def force_finish(self):
         """Force tournament to finish with current best ordering."""
         if self.results is not None:

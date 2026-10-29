@@ -35,24 +35,33 @@ def _measure_label_box(W):
     return bbox
 
 
-def extract_frames(gif_path):
-    """Extract all frames from a GIF as grayscale float32 arrays in [0, 1].
-    float32 instead of float64 halves memory: a 38-frame 2000x2000 GIF needs
-    ~580 MB instead of ~1.16 GB, which is the difference between staying alive
-    and getting OOM-killed on a 4 GB box."""
+def extract_frames_u8(gif_path):
+    """Extract all frames from a GIF as grayscale uint8 arrays.
+
+    GIF pixels are 8-bit, so uint8 loses nothing and is 4x smaller than
+    float32. A 38-frame 2000x2000 GIF takes 150 MB instead of 610 MB.
+    """
     img = Image.open(gif_path)
     frames = []
     try:
         while True:
-            frame = img.convert('L')
-            arr = (np.array(frame, dtype=np.float32) / np.float32(255.0))
-            frames.append(arr)
+            frames.append(np.array(img.convert('L'), dtype=np.uint8))
             img.seek(img.tell() + 1)
     except EOFError:
         pass
     finally:
         img.close()
     return frames
+
+
+def frame_to_float(frame):
+    """A uint8 frame as float32 in [0, 1], the form the metrics expect."""
+    return frame.astype(np.float32) / np.float32(255.0)
+
+
+def extract_frames(gif_path):
+    """Extract all frames from a GIF as grayscale float32 arrays in [0, 1]."""
+    return [frame_to_float(f) for f in extract_frames_u8(gif_path)]
 
 
 def compute_label_exclusion(W, H):
