@@ -121,7 +121,7 @@ Once done, you'll see:
 - A podium with the **top epochs**
 - A full ranking table with all image quality metrics (color-coded)
 - Results are **auto-saved** to `DATA_DIR/results/` as TSV
-- A copy-pastable `./submit_eval.sh` command for the winning epoch (set the metadata dir once; the browser remembers it)
+- A copy-pastable `bash /data/projects/xni/staff/avorobyev/sbatch_jobs/submit_eval.sh` command for the winning epoch (set the metadata dir once; the browser remembers it)
 - Options to **export results**, **re-run** with the same ROI, pick a **new ROI**, or **start over**
 
 To reopen the results screen of any finished tournament, expand **Past Results** on the main screen and click **View**. Candidates whose GIF is still on the server also appear in the top-3 viewer.

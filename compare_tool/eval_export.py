@@ -115,8 +115,8 @@ def build_csv(rows):
 
 # Shown in the generated script's prompt — the dataset's denoising/metadata/
 # directory, which submit_eval.sh takes a path into as its first argument.
-_METADATA_DIR_EXAMPLE = ('/data/visitor/ls3639/id16a/20260211/'
-                         'PROCESSED_DATA/NM0029/denoising/metadata')
+_METADATA_DIR_EXAMPLE = ('/gpfs/gb/data/visitor/ls3722/id16a/20260925/'
+                         'PROCESSED_DATA/H2_L/denoising/metadata')
 
 
 # The cluster path to the dataset's denoising/metadata/ directory can't be
@@ -124,9 +124,10 @@ _METADATA_DIR_EXAMPLE = ('/data/visitor/ls3639/id16a/20260211/'
 # emitted with this token and the UI substitutes the dir the user has saved.
 METADATA_DIR_PLACEHOLDER = '<METADATA_DIR>'
 
-# How every generated eval line starts. One constant so the results-screen
+# How every generated eval line starts: the cluster copy of submit_eval.sh, so
+# the line runs from any directory. One constant so the results-screen
 # one-liner and the batch export can't drift apart.
-_SUBMIT = './submit_eval.sh'
+_SUBMIT = 'bash /data/projects/xni/staff/avorobyev/sbatch_jobs/submit_eval.sh'
 
 
 def build_command(row, metadata_dir=None):
@@ -148,7 +149,7 @@ def command_for_winner(full_label, metadata_dir=None):
     Follows submit_eval.sh's argument contract, which takes a *path* to the
     metadata file and decides the mode purely from the positional count:
 
-      training run (no transfer)  ->  ./submit_eval.sh "<meta>.json" "<epoch>"
+      training run (no transfer)  ->  submit_eval.sh "<meta>.json" "<epoch>"
           the script then sets checkpoint_metadata=metadata, finetune_epoch=epoch
       transfer learning (finetune) ->  ... "<epoch>" "<ckpt_metadata>" "<ft_epoch>"
           where ckpt_metadata is a bare *name*, not a path
