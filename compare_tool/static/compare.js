@@ -860,20 +860,32 @@ function savedElimSet(fallback) {
                                               : Object.keys(pfElimSets)[0] || '';
 }
 
+// The RAW frame fools most metrics into ranking it first, so it always sorts
+// last and stays out of the z-score mean and spread.
+const isRawCandidate = c => /\sRAW\s*$/.test(c.label || '');
+
+function sortPrefilterCandidates(key) {
+    prefilterCandidates.sort((a, b) =>
+        (isRawCandidate(a) - isRawCandidate(b)) || (b[key] - a[key]));
+}
+
 // Rank candidates by the weighted mean of per-metric z-scores for the active
 // set. Exclusions survive a re-rank so switching sets never loses your marks.
 function applyElimRanking() {
     if (!pfCandidatesRaw) return;
     const weights = pfElimSets[pfElimSetName] || {};
     const names = Object.keys(weights);
+    const isRaw = pfCandidatesRaw.map(isRawCandidate);
     const consensus = (valuesArr) => {
         const scores = new Array(pfCandidatesRaw.length).fill(0);
         if (!names.length) return scores;
         names.forEach(name => {
             const weight = weights[name];
             const vals = valuesArr.map(v => (v || {})[name] || 0);
-            const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
-            const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
+            let ref = vals.filter((_, i) => !isRaw[i]);
+            if (!ref.length) ref = vals;
+            const mean = ref.reduce((a, b) => a + b, 0) / ref.length;
+            const variance = ref.reduce((a, b) => a + (b - mean) ** 2, 0) / ref.length;
             const std = Math.sqrt(variance);
             vals.forEach((v, i) => {
                 scores[i] += (std > 1e-10 ? (v - mean) / std : 0) * weight;
@@ -891,8 +903,7 @@ function applyElimRanking() {
         score_full: scoresFull[i],
         _excluded: wasExcluded.has(`${c.exp_id}|${c.epoch}`),
     }));
-    const key = pfSortMode === 'roi' ? 'score' : 'score_full';
-    prefilterCandidates.sort((a, b) => b[key] - a[key]);
+    sortPrefilterCandidates(pfSortMode === 'roi' ? 'score' : 'score_full');
     pfIdxLeft = 0;
     pfIdxRight = prefilterCandidates.length - 1;
     renderPrefilterViewer();
@@ -1084,8 +1095,7 @@ function pfRenderSide(side, idx) {
 
 function pfSetSortMode(mode) {
     pfSortMode = mode;
-    const key = mode === 'full' ? 'score_full' : 'score';
-    prefilterCandidates.sort((a, b) => b[key] - a[key]);
+    sortPrefilterCandidates(mode === 'full' ? 'score_full' : 'score');
     // Reset navigation to boundaries of the new sort
     pfIdxLeft = 0;
     pfIdxRight = prefilterCandidates.length - 1;
