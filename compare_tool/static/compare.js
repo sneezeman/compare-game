@@ -171,7 +171,18 @@ async function loadPreloaded() {
                 // Shallow paths (no second segment) hang experiments off level 1.
                 const l2Folder = l2 ? makeFolder(escapeHtml(l2), '') : null;
                 const expParent = l2Folder ? l2Folder.contents : l1Folder.contents;
-                Object.keys(tree[l1][l2]).sort().forEach(expDir => {
+                const expDirs = Object.keys(tree[l1][l2]).sort();
+                const byTarget = groupFinetunesByTarget(expDirs);
+                expDirs.forEach(expDir => {
+                    // A tile finetuned from several sources is shown once, at its first source.
+                    const ft = parseFinetuneDir(expDir);
+                    const siblings = ft ? byTarget[ft.target] : null;
+                    if (siblings && siblings.length > 1) {
+                        if (siblings[0] === expDir) {
+                            expParent.appendChild(makeTargetGroup(ft, siblings, tree[l1][l2]));
+                        }
+                        return;
+                    }
                     const exps = tree[l1][l2][expDir]
                         .sort((a, b) => a.viewFile.localeCompare(b.viewFile));
                     const expFolder = makeFolder(formatDirName(expDir), expDir);
@@ -201,11 +212,60 @@ async function loadPreloaded() {
 
 let _folderSeq = 0;
 
+const _TILE_RE = /(?:^|_)(T\d+)(?:_|$)/;
+
+// '<target>_rec__from_<source>_rec__<epoch>' -> parts, or null for other dirs.
+function parseFinetuneDir(expDir) {
+    const name = expDir.split('/').pop() || expDir;
+    const m = name.match(/^(.+?_rec_)_from_(.+?_rec_)_(\d+)$/);
+    if (!m) return null;
+    const tile = meta => (meta.match(_TILE_RE) || [, meta])[1];
+    return { target: m[1], targetTile: tile(m[1]), sourceTile: tile(m[2]), epoch: m[3] };
+}
+
+// target metadata -> finetune dirs that train it, in the given order.
+function groupFinetunesByTarget(expDirs) {
+    const groups = {};
+    expDirs.forEach(d => {
+        const ft = parseFinetuneDir(d);
+        if (ft) (groups[ft.target] ??= []).push(d);
+    });
+    return groups;
+}
+
+// One target tile finetuned from several sources: tile -> view -> one GIF per source.
+function makeTargetGroup(ft, dirs, expsByDir) {
+    const sources = dirs.map(d => {
+        const p = parseFinetuneDir(d);
+        return `${p.sourceTile}@${p.epoch}`;
+    });
+    const folder = makeFolder(
+        `<span class="dir-tomo">${escapeHtml(ft.targetTile)}</span> `
+        + `<span class="dir-type">finetuned from ${escapeHtml(sources.join(', '))}</span>`,
+        ft.target);
+
+    const byView = {};
+    dirs.forEach(d => expsByDir[d].forEach(exp => {
+        const view = (exp.viewFile.match(/view\d+/) || [exp.viewFile])[0];
+        (byView[view] ??= []).push(exp);
+    }));
+    Object.keys(byView).sort().forEach(view => {
+        const viewFolder = makeFolder(escapeHtml(view), '', { clickSelects: true });
+        byView[view].forEach(exp =>
+            viewFolder.contents.appendChild(makeExpItem(exp, shortExpLabel(exp.filename).replace(/ view\d+$/, ''))));
+        folder.contents.appendChild(viewFolder.group);
+    });
+
+    if (dirs.every(d => expsByDir[d].every(e => e.has_results))) collapseFolder(folder);
+    return folder.group;
+}
+
 // Create a collapsible folder; returns {group, contents}. The folder checkbox
 // cascades down to every .exp-checkbox nested inside (any depth); ancestor
 // folders re-sync via refreshAllFolders() on any change. `label` is raw HTML
 // (callers pass escapeHtml(...) for plain text, or formatDirName(...) markup).
-function makeFolder(label, rawPath) {
+// With clickSelects, clicking the name checks every GIF inside instead of collapsing.
+function makeFolder(label, rawPath, { clickSelects = false } = {}) {
     const id = 'dir-' + (_folderSeq++);
     const group = document.createElement('div');
     group.className = 'dir-group';
@@ -217,7 +277,8 @@ function makeFolder(label, rawPath) {
             <input type="checkbox" class="dir-checkbox"
                    onchange="toggleDirCheckboxes('${id}', this.checked)">
         </label>
-        <span class="dir-name" onclick="toggleDir('${id}')">${label}</span>
+        <span class="dir-name" onclick="${clickSelects ? 'selectDir' : 'toggleDir'}('${id}')"
+              ${clickSelects ? 'title="Select all GIFs of this view"' : ''}>${label}</span>
         ${rawPath ? `<span class="dir-raw-path">${escapeHtml(rawPath)}</span>` : ''}
     `;
     const contents = document.createElement('div');
@@ -228,8 +289,8 @@ function makeFolder(label, rawPath) {
     return { group, contents };
 }
 
-// One selectable view-GIF row.
-function makeExpItem(exp) {
+// One selectable view-GIF row; `label` replaces the file name when given.
+function makeExpItem(exp, label = null) {
     const doneBadge = exp.has_results
         ? `<span class="done-badge">${exp.done_by ? 'done by ' + escapeHtml(exp.done_by) : 'done'}</span>`
         : '';
@@ -242,7 +303,7 @@ function makeExpItem(exp) {
                    data-height="${exp.height}" data-filename="${escapeHtml(exp.filename)}">
         </label>
         <div class="exp-info-text">
-            <span class="filename">${escapeHtml(exp.viewFile)} ${doneBadge}</span>
+            <span class="filename" title="${escapeHtml(exp.filename)}">${escapeHtml(label || exp.viewFile)} ${doneBadge}</span>
             <span class="info">${exp.num_epochs} epochs, ${exp.width}x${exp.height}</span>
         </div>
     `;
@@ -325,6 +386,12 @@ function toggleDir(dirId) {
         contents.classList.add('collapsed');
         toggle.innerHTML = '&#9654;';
     }
+}
+
+// Check every GIF in a folder, or uncheck them all when all are already checked.
+function selectDir(dirId) {
+    const boxes = [...document.getElementById(dirId).querySelectorAll('.exp-checkbox')];
+    toggleDirCheckboxes(dirId, !boxes.every(cb => cb.checked));
 }
 
 // A folder checkbox cascades to every nested .exp-checkbox, then all folder
