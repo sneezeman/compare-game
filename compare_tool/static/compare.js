@@ -256,7 +256,8 @@ function makeTargetGroup(ft, dirs, expsByDir) {
         folder.contents.appendChild(viewFolder.group);
     });
 
-    if (dirs.every(d => expsByDir[d].every(e => e.has_results))) collapseFolder(folder);
+    // One finished view is enough to choose the epoch for this tile.
+    if (Object.values(byView).some(exps => exps.every(e => e.has_results))) collapseFolder(folder);
     return folder.group;
 }
 
